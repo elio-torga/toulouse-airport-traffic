@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toulouse-Blagnac Traffic, 1990–2027</title>
+<meta name="description" content="35 years of official DGAC air traffic data for Toulouse-Blagnac airport, modelled in PostgreSQL, with a 2026–2027 forecast.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: a calm instrument panel. One column of chart panels, summary first, the
+   engineering ("under the hood") last. Toulouse, the "pink city", is the only loud colour. */
+:root {
+  color-scheme: light;
+  --page: #f3f5f8;
+  --surface: #ffffff;
+  --ink: #0f1720;
+  --ink-2: #465163;
+  --muted: #6f7a89;
+  --grid: #e6e9ee;
+  --axis: #c3c9d2;
+  --border: rgba(15, 23, 32, 0.09);
+  --accent: #d6336c;          /* Toulouse */
+  --accent-ink: #b0244f;
+  --gray: #8a94a2;            /* every other airport (emphasis, not identity) */
+  --dom: #2a78d6;             /* domestic routes  (categorical slot 1) */
+  --intl: #eb6834;            /* international routes (categorical slot 2) */
+  --good: #0a7a0a;
+  --good-bg: rgba(12, 163, 12, 0.10);
+  --div-lo: #256abf;
+  --div-mid: #eef0f3;
+  --div-hi: #d03b3b;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0b0f14; --surface: #141a22; --ink: #eef1f5; --ink-2: #b4bdc9; --muted: #8893a2;
+    --grid: #222a35; --axis: #3a4452; --border: rgba(255, 255, 255, 0.08);
+    --accent: #e8508a; --accent-ink: #f07aa5; --gray: #4f5967; --dom: #3987e5; --intl: #d95926;
+    --good: #2fbf2f; --good-bg: rgba(12, 163, 12, 0.16);
+    --div-lo: #3987e5; --div-mid: #2a323d; --div-hi: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0b0f14; --surface: #141a22; --ink: #eef1f5; --ink-2: #b4bdc9; --muted: #8893a2;
+  --grid: #222a35; --axis: #3a4452; --border: rgba(255, 255, 255, 0.08);
+  --accent: #e8508a; --accent-ink: #f07aa5; --gray: #4f5967; --dom: #3987e5; --intl: #d95926;
+  --good: #2fbf2f; --good-bg: rgba(12, 163, 12, 0.16);
+  --div-lo: #3987e5; --div-mid: #2a323d; --div-hi: #e66767;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--page); color: var(--ink);
+  font: 400 16px/1.55 var(--font-body);
+}
+a { color: var(--accent-ink); text-underline-offset: 2px; }
+a:focus-visible, summary:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+
+/* ---------- header ---------- */
+.board {
+  font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.04em; color: var(--ink-2);
+  border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.board .wrap { display: flex; flex-wrap: wrap; gap: 6px 22px; padding-top: 10px; padding-bottom: 10px; }
+.board b { color: var(--ink); font-weight: 500; }
+.board .code { color: var(--accent-ink); font-weight: 500; }
+header.hero { padding: 44px 0 8px; }
+.eyebrow { font: 500 13px/1.3 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+h1 {
+  font: 700 clamp(34px, 5.4vw, 56px)/1.04 var(--font-display); letter-spacing: -0.01em;
+  margin: 0 0 16px; text-wrap: balance; max-width: 20ch;
+}
+h1 em { font-style: normal; color: var(--accent); }
+.lede { font-size: 18px; color: var(--ink-2); max-width: 64ch; margin: 0 0 6px; }
+.byline { font-size: 14px; color: var(--muted); margin: 14px 0 0; }
+
+/* ---------- KPI tiles ---------- */
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 28px 0 8px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px 14px; }
+.kpi .label { font-size: 13.5px; color: var(--ink-2); margin: 0 0 6px; }
+.kpi .value { font: 600 34px/1.05 var(--font-body); letter-spacing: -0.01em; margin: 0; }
+.kpi .value small { font-size: 18px; font-weight: 500; color: var(--ink-2); margin-left: 2px; }
+.kpi .delta { font-size: 13.5px; color: var(--muted); margin: 8px 0 0; }
+.kpi .delta .down { color: var(--accent-ink); font-weight: 500; }
+.kpi.lead .value { color: var(--accent); }
+
+/* ---------- panels ---------- */
+section.panel {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 26px 26px 18px; margin: 18px 0;
+}
+.panel-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 24px; align-items: end; margin-bottom: 8px; }
+.num { font: 500 12.5px var(--font-mono); color: var(--muted); letter-spacing: 0.06em; margin: 0 0 6px; }
+h2 { font: 600 clamp(22px, 2.6vw, 28px)/1.15 var(--font-display); margin: 0; text-wrap: balance; }
+.panel p.text { color: var(--ink-2); max-width: 70ch; margin: 10px 0 4px; }
+.panel p.text strong { color: var(--ink); font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
+.legend i.line { width: 18px; height: 2px; border-radius: 1px; }
+.legend i.dash { width: 18px; height: 0; border-top: 2px dashed var(--accent); border-radius: 0; background: none !important; }
+.chart { position: relative; width: 100%; margin-top: 14px; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { font-family: var(--font-body); }
+.tick text, .axis-label { font-size: 12px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.note { font-size: 13px; color: var(--muted); margin: 10px 0 0; max-width: 80ch; }
+.split { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+.facts { display: grid; gap: 10px; margin-top: 14px; }
+.fact { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; }
+.fact .big { font: 600 24px/1.15 var(--font-body); }
+.fact .small { font-size: 13.5px; color: var(--ink-2); }
+
+details.table-view { margin-top: 12px; border-top: 1px solid var(--grid); padding-top: 8px; }
+details.table-view summary { cursor: pointer; font-size: 13px; color: var(--muted); width: max-content; }
+details.table-view .scroll { overflow-x: auto; max-height: 340px; overflow-y: auto; margin-top: 8px; }
+table { border-collapse: collapse; font-size: 13px; width: 100%; }
+th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
+tr.hl td { color: var(--ink); font-weight: 600; }
+
+/* ---------- under the hood ---------- */
+.hood-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px; margin-top: 16px; }
+.hood-grid > div, .split > div { min-width: 0; }
+#reality, #mape { overflow-x: auto; }
+.hood-grid h3 { font: 600 17px/1.3 var(--font-display); margin: 0 0 8px; }
+.pipeline { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin-top: 14px; }
+.step { flex: 1 1 140px; background: var(--page); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; position: relative; }
+.step .k { font: 500 11.5px var(--font-mono); color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; }
+.step .v { font-size: 14px; font-weight: 600; margin-top: 3px; }
+.step .d { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+.checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.checks li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13.5px; }
+.pill { font: 600 11.5px var(--font-mono); letter-spacing: 0.04em; color: var(--good); background: var(--good-bg); border-radius: 999px; padding: 2px 8px 2px 6px; white-space: nowrap; }
+.checks .r { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.schema { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; font-size: 12.5px; }
+.tbl { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--page); }
+.tbl.fact-t { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.tbl .n { font: 500 12px var(--font-mono); color: var(--ink); margin-bottom: 3px; overflow-wrap: anywhere; }
+.tbl .c { font-family: var(--font-mono); color: var(--muted); line-height: 1.5; }
+code { font-family: var(--font-mono); font-size: 0.92em; }
+pre.sql { margin: 10px 0 0; background: var(--page); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font: 12.5px/1.55 var(--font-mono); color: var(--ink-2); }
+pre.sql .kw { color: var(--accent-ink); font-weight: 500; }
+.stat-row { display: flex; flex-wrap: wrap; gap: 18px 32px; margin-top: 12px; }
+.stat-row div { font-size: 13px; color: var(--ink-2); }
+.stat-row b { display: block; font-size: 22px; font-weight: 600; color: var(--ink); }
+
+footer { color: var(--muted); font-size: 13px; padding: 18px 0 48px; }
+footer p { margin: 6px 0; max-width: 90ch; }
+
+/* ---------- tooltip ---------- */
+#tip {
+  position: fixed; z-index: 10; pointer-events: none; opacity: 0; transition: opacity 0.12s;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14); padding: 8px 11px; font-size: 13px; line-height: 1.45; max-width: 260px;
+}
+#tip b { font-weight: 600; }
+#tip .m { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { #tip { transition: none; } }
+
+@media (max-width: 860px) {
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .split, .hood-grid { grid-template-columns: 1fr; }
+  .panel-head { grid-template-columns: 1fr; }
+}
+@media (max-width: 420px) {
+  .wrap { padding: 0 16px; }
+  section.panel { padding: 20px 16px 14px; }
+  .kpi .value { font-size: 28px; }
+  .schema { grid-template-columns: 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="board" aria-label="Airport identification">
+  <div class="wrap">
+    <span><span class="code">LFBO</span> / <b>TLS</b></span>
+    <span><b>Toulouse-Blagnac</b> · Haute-Garonne</span>
+    <span>DGAC monthly commercial traffic · <b>Jan 1990 – Dec 2025</b></span>
+    <span>Forecast <b>2026–2027</b></span>
+  </div>
+</div>
+
+<main class="wrap">
+  <header class="hero">
+    <p class="eyebrow">A data project on official French air traffic statistics</p>
+    <h1>35 years of air traffic at <em>Toulouse-Blagnac</em></h1>
+    <p class="lede">Traffic tripled in three decades, then Covid wiped out two thirds of it in a single year. Six years on, Toulouse has recovered less of its 2019 traffic than most large French regional airports, and the model expects 2026–2027 to stay flat.</p>
+    <p class="byline">By Elio Torga · Data: DGAC via data.gouv.fr · PostgreSQL, Python, D3</p>
+  </header>
+
+  <div class="kpis" id="kpis"></div>
+
+  <section class="panel" id="growth" aria-labelledby="h-growth">
+    <div class="panel-head">
+      <div><p class="num">01 · Annual passengers</p><h2 id="h-growth">Three decades of growth, then one cliff</h2></div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>Actual</span><span><i style="background:var(--accent);opacity:.35"></i>Forecast</span></div>
+    </div>
+    <p class="text" id="growth-text"></p>
+    <div class="chart" id="chart-annual"></div>
+    <details class="table-view"><summary>View data table</summary><div class="scroll" id="table-annual"></div></details>
+  </section>
+
+  <section class="panel" id="recovery" aria-labelledby="h-recovery">
+    <div class="split">
+      <div>
+        <p class="num">02 · Post-Covid recovery</p>
+        <h2 id="h-recovery">Toulouse recovered less than most of its peers</h2>
+        <p class="text" id="recovery-text"></p>
+        <div class="chart" id="chart-recovery"></div>
+      </div>
+      <div>
+        <div class="facts" id="recovery-facts"></div>
+        <p class="note">Domestic and international split from the airport's Q2 2026 press release; the DGAC airport series does not separate them. Like-for-like Orly figure from the DGAC route series, on the months published in both years.</p>
+      </div>
+    </div>
+    <details class="table-view"><summary>View data table</summary><div class="scroll" id="table-recovery"></div></details>
+  </section>
+
+  <section class="panel" id="season" aria-labelledby="h-season">
+    <div class="panel-head">
+      <div><p class="num">03 · Seasonality</p><h2 id="h-season">The busy season moved to summer</h2></div>
+      <div class="legend" id="season-legend"></div>
+    </div>
+    <p class="text" id="season-text"></p>
+    <div class="chart" id="chart-heat"></div>
+    <p class="note">Each cell compares a month with the average month of the same year. 2020 and 2021 run off the scale (Covid) and are clamped to its ends.</p>
+    <details class="table-view"><summary>View data table</summary><div class="scroll" id="table-season"></div></details>
+  </section>
+
+  <section class="panel" id="planes" aria-labelledby="h-planes">
+    <div class="panel-head">
+      <div><p class="num">04 · Passengers per flight</p><h2 id="h-planes">Planes got bigger and fuller</h2></div>
+    </div>
+    <p class="text" id="planes-text"></p>
+    <div class="chart" id="chart-ppf"></div>
+    <details class="table-view"><summary>View data table</summary><div class="scroll" id="table-ppf"></div></details>
+  </section>
+
+  <section class="panel" id="routes" aria-labelledby="h-routes">
+    <div class="panel-head">
+      <div><p class="num">05 · Route data</p><h2 id="h-routes">Route figures exist only where airlines compete</h2></div>
+      <div class="legend"><span><i style="background:var(--dom)"></i>Domestic</span><span><i style="background:var(--intl)"></i>International</span></div>
+    </div>
+    <p class="text" id="routes-text"></p>
+    <div class="chart" id="chart-routes"></div>
+    <p class="note">Each bar is a run of consecutive published months, found with a gaps-and-islands SQL query. Routes shown: published for at least 12 months.</p>
+    <details class="table-view"><summary>View data table</summary><div class="scroll" id="table-routes"></div></details>
+  </section>
+
+  <section class="panel" id="forecast" aria-labelledby="h-forecast">
+    <div class="split">
+      <div>
+        <p class="num">06 · Forecast</p>
+        <h2 id="h-forecast">2026–2027: a plateau around 7.7 million</h2>
+        <p class="text" id="forecast-text"></p>
+        <div class="legend" style="margin-top:10px"><span><i class="line" style="background:var(--accent)"></i>Actual (DGAC)</span><span><i class="dash"></i>Forecast</span><span><i style="background:var(--accent);opacity:.28"></i>80% interval</span><span><i style="background:var(--accent);opacity:.12"></i>95% interval</span></div>
+        <div class="chart" id="chart-forecast"></div>
+      </div>
+      <div>
+        <h3 style="font:600 17px/1.3 var(--font-display);margin:4px 0 8px">Reality check: 2026 so far</h3>
+        <p class="note" style="margin-top:0">The model only saw data up to December 2025. The airport has since published three quarters.</p>
+        <div id="reality"></div>
+        <h3 style="font:600 17px/1.3 var(--font-display);margin:20px 0 8px">Backtest error (MAPE)</h3>
+        <div id="mape"></div>
+      </div>
+    </div>
+    <details class="table-view"><summary>View data table</summary><div class="scroll" id="table-forecast"></div></details>
+  </section>
+
+  <section class="panel" id="hood" aria-labelledby="h-hood">
+    <p class="num">07 · Under the hood</p>
+    <h2 id="h-hood">How it is built</h2>
+    <div class="pipeline" id="pipeline"></div>
+    <div class="hood-grid">
+      <div>
+        <h3>Star schema</h3>
+        <div class="schema">
+          <div class="tbl"><div class="n">dim_date</div><div class="c">date_id (YYYYMM)<br>year · month · is_covid</div></div>
+          <div class="tbl fact-t"><div class="n">fact_airport_traffic</div><div class="c">pax dep · arr · transit<br>freight · movements</div></div>
+          <div class="tbl"><div class="n">dim_airport</div><div class="c">icao · name<br>zone · is_french</div></div>
+          <div class="tbl"><div class="n">dim_route</div><div class="c">route_code<br>airport_1 · airport_2 · km</div></div>
+          <div class="tbl fact-t"><div class="n">fact_route_traffic</div><div class="c">pax local · on board<br>services · movements</div></div>
+          <div class="tbl"><div class="n">fact_forecast</div><div class="c">model · pax<br>80% · 95% bounds</div></div>
+        </div>
+        <pre class="sql"><span class="kw">WITH</span> islands <span class="kw">AS</span> (
+  <span class="kw">SELECT</span> dest_icao, month_start,
+         month_start - (<span class="kw">ROW_NUMBER() OVER</span> (
+           <span class="kw">PARTITION BY</span> dest_icao <span class="kw">ORDER BY</span> month_start)
+           * <span class="kw">interval</span> '1 month') <span class="kw">AS</span> island_key
+  <span class="kw">FROM</span> published)
+<span class="kw">SELECT</span> dest_icao, <span class="kw">MIN</span>(month_start), <span class="kw">MAX</span>(month_start)
+<span class="kw">FROM</span> islands <span class="kw">GROUP BY</span> dest_icao, island_key;</pre>
+      </div>
+      <div>
+        <h3>Data quality checks</h3>
+        <ul class="checks" id="checks"></ul>
+      </div>
+    </div>
+    <div style="margin-top:26px">
+      <h3 style="font:600 17px/1.3 var(--font-display);margin:0">Query performance on 17.7 million simulated flights</h3>
+      <p class="text" id="bench-text"></p>
+      <div class="legend" style="margin-top:8px"><span><i style="background:var(--gray)"></i>No index</span><span><i style="background:var(--accent)"></i>Best optimisation</span></div>
+      <div class="chart" id="chart-bench"></div>
+      <div class="stat-row" id="bench-stats"></div>
+    </div>
+    <details class="table-view"><summary>View benchmark table</summary><div class="scroll" id="table-bench"></div></details>
+  </section>
+
+  <footer>
+    <p><b>Data.</b> DGAC, <a href="https://www.data.gouv.fr/datasets/64808a5811da153f1439914c">Trafic aérien commercial mensuel français</a> (series APT and PAP, Licence Ouverte 2.0), January 1990 to December 2025. Passengers = departing + arriving + transit. 2026 quarterly figures and the domestic/international split come from the airport's press releases (<a href="https://www.air-journal.fr/?p=275367">Q1</a>, <a href="https://www.toulouse.aeroport.fr/sites/default/files/2026-08/CP_Trafic_T2_2026.pdf">Q2</a>, <a href="https://www.air-journal.fr/?p=278869">Q3</a>).</p>
+    <p><b>Method.</b> Raw CSV loaded untouched into a PostgreSQL staging schema, typed into a star schema, checked, analysed in SQL; forecast with a SARIMA(0,1,1)(0,1,1)<sub>12</sub> airline model averaged with a seasonal-naive benchmark. The benchmark table is simulated from real monthly totals and used only for performance tests.</p>
+  </footer>
+</main>
+
+<div id="tip" role="tooltip"></div>
+<script id="data" type="application/json">{"annual":[{"year":1990,"pax":3182394,"flights":35533,"freight_t":28123.0,"rank":6,"pax_per_flight":89.6},{"year":1991,"pax":3009310,"flights":36326,"freight_t":32718.0,"rank":6,"pax_per_flight":82.8},{"year":1992,"pax":3120980,"flights":35803,"freight_t":34570.0,"rank":6,"pax_per_flight":87.2},{"year":1993,"pax":3173050,"flights":34733,"freight_t":34881.0,"rank":6,"pax_per_flight":91.4},{"year":1994,"pax":3369954,"flights":33454,"freight_t":37465.0,"rank":6,"pax_per_flight":100.7},{"year":1995,"pax":3775202,"flights":43554,"freight_t":41613.0,"rank":6,"pax_per_flight":86.7},{"year":1996,"pax":4207197,"flights":55437,"freight_t":41106.0,"rank":6,"pax_per_flight":75.9},{"year":1997,"pax":4414489,"flights":63289,"freight_t":45928.0,"rank":6,"pax_per_flight":69.8},{"year":1998,"pax":4715825,"flights":68877,"freight_t":45693.0,"rank":6,"pax_per_flight":68.5},{"year":1999,"pax":5067540,"flights":77025,"freight_t":46578.0,"rank":6,"pax_per_flight":65.8},{"year":2000,"pax":5350112,"flights":81340,"freight_t":59697.0,"rank":6,"pax_per_flight":65.8},{"year":2001,"pax":5243807,"flights":79386,"freight_t":63637.0,"rank":6,"pax_per_flight":66.1},{"year":2002,"pax":5336544,"flights":76319,"freight_t":53319.0,"rank":6,"pax_per_flight":69.9},{"year":2003,"pax":5304297,"flights":72249,"freight_t":54076.0,"rank":6,"pax_per_flight":73.4},{"year":2004,"pax":5612405,"flights":71367,"freight_t":51640.0,"rank":6,"pax_per_flight":78.6},{"year":2005,"pax":5799255,"flights":72613,"freight_t":56209.0,"rank":6,"pax_per_flight":79.9},{"year":2006,"pax":5960023,"flights":74354,"freight_t":58507.0,"rank":6,"pax_per_flight":80.2},{"year":2007,"pax":6173929,"flights":75300,"freight_t":55022.0,"rank":6,"pax_per_flight":82.0},{"year":2008,"pax":6370984,"flights":76569,"freight_t":54630.0,"rank":6,"pax_per_flight":83.2},{"year":2009,"pax":6301501,"flights":74059,"freight_t":54901.0,"rank":6,"pax_per_flight":85.1},{"year":2010,"pax":6425309,"flights":75271,"freight_t":59921.0,"rank":6,"pax_per_flight":85.4},{"year":2011,"pax":7007241,"flights":79944,"freight_t":24852.0,"rank":6,"pax_per_flight":87.7},{"year":2012,"pax":7582316,"flights":83270,"freight_t":58031.0,"rank":6,"pax_per_flight":91.1},{"year":2013,"pax":7593326,"flights":79152,"freight_t":71002.0,"rank":6,"pax_per_flight":95.9},{"year":2014,"pax":7539065,"flights":76472,"freight_t":72371.0,"rank":6,"pax_per_flight":98.6},{"year":2015,"pax":7684732,"flights":76059,"freight_t":71769.0,"rank":6,"pax_per_flight":101.0},{"year":2016,"pax":8103962,"flights":78164,"freight_t":80508.0,"rank":6,"pax_per_flight":103.7},{"year":2017,"pax":9286708,"flights":85218,"freight_t":88396.0,"rank":5,"pax_per_flight":109.0},{"year":2018,"pax":9652389,"flights":83921,"freight_t":83765.0,"rank":5,"pax_per_flight":115.0},{"year":2019,"pax":9636114,"flights":82756,"freight_t":81280.0,"rank":6,"pax_per_flight":116.4},{"year":2020,"pax":3137575,"flights":30852,"freight_t":58811.0,"rank":6,"pax_per_flight":101.7},{"year":2021,"pax":3827547,"flights":37129,"freight_t":55826.0,"rank":6,"pax_per_flight":103.1},{"year":2022,"pax":7046929,"flights":60805,"freight_t":55235.0,"rank":6,"pax_per_flight":115.9},{"year":2023,"pax":7816358,"flights":65134,"freight_t":40930.0,"rank":7,"pax_per_flight":120.0},{"year":2024,"pax":7853880,"flights":64109,"freight_t":43583.0,"rank":7,"pax_per_flight":122.5},{"year":2025,"pax":7630981,"flights":60957,"freight_t":45001.0,"rank":7,"pax_per_flight":125.2}],"monthly":[{"month":"1990-01","pax":251379,"rolling_12m":251379},{"month":"1990-02","pax":245424,"rolling_12m":496803},{"month":"1990-03","pax":279802,"rolling_12m":776605},{"month":"1990-04","pax":288227,"rolling_12m":1064832},{"month":"1990-05","pax":282160,"rolling_12m":1346992},{"month":"1990-06","pax":307200,"rolling_12m":1654192},{"month":"1990-07","pax":244349,"rolling_12m":1898541},{"month":"1990-08","pax":215225,"rolling_12m":2113766},{"month":"1990-09","pax":284786,"rolling_12m":2398552},{"month":"1990-10","pax":292918,"rolling_12m":2691470},{"month":"1990-11","pax":247649,"rolling_12m":2939119},{"month":"1990-12","pax":243275,"rolling_12m":3182394},{"month":"1991-01","pax":236763,"rolling_12m":3167778},{"month":"1991-02","pax":213456,"rolling_12m":3135810},{"month":"1991-03","pax":258604,"rolling_12m":3114612},{"month":"1991-04","pax":259163,"rolling_12m":3085548},{"month":"1991-05","pax":259193,"rolling_12m":3062581},{"month":"1991-06","pax":286966,"rolling_12m":3042347},{"month":"1991-07","pax":244485,"rolling_12m":3042483},{"month":"1991-08","pax":202367,"rolling_12m":3029625},{"month":"1991-09","pax":270705,"rolling_12m":3015544},{"month":"1991-10","pax":279548,"rolling_12m":3002174},{"month":"1991-11","pax":247522,"rolling_12m":3002047},{"month":"1991-12","pax":250538,"rolling_12m":3009310},{"month":"1992-01","pax":240067,"rolling_12m":3012614},{"month":"1992-02","pax":241317,"rolling_12m":3040475},{"month":"1992-03","pax":268960,"rolling_12m":3050831},{"month":"1992-04","pax":283300,"rolling_12m":3074968},{"month":"1992-05","pax":271288,"rolling_12m":3087063},{"month":"1992-06","pax":293683,"rolling_12m":3093780},{"month":"1992-07","pax":244485,"rolling_12m":3093780},{"month":"1992-08","pax":214062,"rolling_12m":3105475},{"month":"1992-09","pax":287772,"rolling_12m":3122542},{"month":"1992-10","pax":283383,"rolling_12m":3126377},{"month":"1992-11","pax":236717,"rolling_12m":3115572},{"month":"1992-12","pax":255946,"rolling_12m":3120980},{"month":"1993-01","pax":249031,"rolling_12m":3129944},{"month":"1993-02","pax":241788,"rolling_12m":3130415},{"month":"1993-03","pax":265980,"rolling_12m":3127435},{"month":"1993-04","pax":282877,"rolling_12m":3127012},{"month":"1993-05","pax":290901,"rolling_12m":3146625},{"month":"1993-06","pax":307087,"rolling_12m":3160029},{"month":"1993-07","pax":260929,"rolling_12m":3176473},{"month":"1993-08","pax":229225,"rolling_12m":3191636},{"month":"1993-09","pax":285559,"rolling_12m":3189423},{"month":"1993-10","pax":265645,"rolling_12m":3171685},{"month":"1993-11","pax":238761,"rolling_12m":3173729},{"month":"1993-12","pax":255267,"rolling_12m":3173050},{"month":"1994-01","pax":260639,"rolling_12m":3184658},{"month":"1994-02","pax":248413,"rolling_12m":3191283},{"month":"1994-03","pax":292385,"rolling_12m":3217688},{"month":"1994-04","pax":291005,"rolling_12m":3225816},{"month":"1994-05","pax":305047,"rolling_12m":3239962},{"month":"1994-06","pax":326196,"rolling_12m":3259071},{"month":"1994-07","pax":279163,"rolling_12m":3277305},{"month":"1994-08","pax":229986,"rolling_12m":3278066},{"month":"1994-09","pax":301370,"rolling_12m":3293877},{"month":"1994-10","pax":288828,"rolling_12m":3317060},{"month":"1994-11","pax":267399,"rolling_12m":3345698},{"month":"1994-12","pax":279523,"rolling_12m":3369954},{"month":"1995-01","pax":309100,"rolling_12m":3418415},{"month":"1995-02","pax":308492,"rolling_12m":3478494},{"month":"1995-03","pax":333963,"rolling_12m":3520072},{"month":"1995-04","pax":324620,"rolling_12m":3553687},{"month":"1995-05","pax":329436,"rolling_12m":3578076},{"month":"1995-06","pax":362106,"rolling_12m":3613986},{"month":"1995-07","pax":305185,"rolling_12m":3640008},{"month":"1995-08","pax":257401,"rolling_12m":3667423},{"month":"1995-09","pax":327645,"rolling_12m":3693698},{"month":"1995-10","pax":335766,"rolling_12m":3740636},{"month":"1995-11","pax":295935,"rolling_12m":3769172},{"month":"1995-12","pax":285553,"rolling_12m":3775202},{"month":"1996-01","pax":337853,"rolling_12m":3803955},{"month":"1996-02","pax":331977,"rolling_12m":3827440},{"month":"1996-03","pax":385962,"rolling_12m":3879439},{"month":"1996-04","pax":369311,"rolling_12m":3924130},{"month":"1996-05","pax":369065,"rolling_12m":3963759},{"month":"1996-06","pax":392437,"rolling_12m":3994090},{"month":"1996-07","pax":340077,"rolling_12m":4028982},{"month":"1996-08","pax":298252,"rolling_12m":4069833},{"month":"1996-09","pax":357517,"rolling_12m":4099705},{"month":"1996-10","pax":356791,"rolling_12m":4120730},{"month":"1996-11","pax":319804,"rolling_12m":4144599},{"month":"1996-12","pax":348151,"rolling_12m":4207197},{"month":"1997-01","pax":354336,"rolling_12m":4223680},{"month":"1997-02","pax":352234,"rolling_12m":4243937},{"month":"1997-03","pax":395326,"rolling_12m":4253301},{"month":"1997-04","pax":375321,"rolling_12m":4259311},{"month":"1997-05","pax":351926,"rolling_12m":4242172},{"month":"1997-06","pax":411749,"rolling_12m":4261484},{"month":"1997-07","pax":365036,"rolling_12m":4286443},{"month":"1997-08","pax":324015,"rolling_12m":4312206},{"month":"1997-09","pax":388850,"rolling_12m":4343539},{"month":"1997-10","pax":388844,"rolling_12m":4375592},{"month":"1997-11","pax":344341,"rolling_12m":4400129},{"month":"1997-12","pax":362511,"rolling_12m":4414489},{"month":"1998-01","pax":368233,"rolling_12m":4428386},{"month":"1998-02","pax":372952,"rolling_12m":4449104},{"month":"1998-03","pax":419448,"rolling_12m":4473226},{"month":"1998-04","pax":414827,"rolling_12m":4512732},{"month":"1998-05","pax":393695,"rolling_12m":4554501},{"month":"1998-06","pax":412723,"rolling_12m":4555475},{"month":"1998-07","pax":390266,"rolling_12m":4580705},{"month":"1998-08","pax":334612,"rolling_12m":4591302},{"month":"1998-09","pax":414705,"rolling_12m":4617157},{"month":"1998-10","pax":422321,"rolling_12m":4650634},{"month":"1998-11","pax":370055,"rolling_12m":4676348},{"month":"1998-12","pax":401988,"rolling_12m":4715825},{"month":"1999-01","pax":407624,"rolling_12m":4755216},{"month":"1999-02","pax":401546,"rolling_12m":4783810},{"month":"1999-03","pax":450322,"rolling_12m":4814684},{"month":"1999-04","pax":434433,"rolling_12m":4834290},{"month":"1999-05","pax":428319,"rolling_12m":4868914},{"month":"1999-06","pax":465828,"rolling_12m":4922019},{"month":"1999-07","pax":415687,"rolling_12m":4947440},{"month":"1999-08","pax":359453,"rolling_12m":4972281},{"month":"1999-09","pax":442433,"rolling_12m":5000009},{"month":"1999-10","pax":443988,"rolling_12m":5021676},{"month":"1999-11","pax":407534,"rolling_12m":5059155},{"month":"1999-12","pax":410373,"rolling_12m":5067540},{"month":"2000-01","pax":425460,"rolling_12m":5085376},{"month":"2000-02","pax":432698,"rolling_12m":5116528},{"month":"2000-03","pax":487198,"rolling_12m":5153404},{"month":"2000-04","pax":453823,"rolling_12m":5172794},{"month":"2000-05","pax":473776,"rolling_12m":5218251},{"month":"2000-06","pax":465790,"rolling_12m":5218213},{"month":"2000-07","pax":449867,"rolling_12m":5252393},{"month":"2000-08","pax":375975,"rolling_12m":5268915},{"month":"2000-09","pax":465481,"rolling_12m":5291963},{"month":"2000-10","pax":467754,"rolling_12m":5315729},{"month":"2000-11","pax":419503,"rolling_12m":5327698},{"month":"2000-12","pax":432787,"rolling_12m":5350112},{"month":"2001-01","pax":450958,"rolling_12m":5375610},{"month":"2001-02","pax":447076,"rolling_12m":5389988},{"month":"2001-03","pax":486027,"rolling_12m":5388817},{"month":"2001-04","pax":469734,"rolling_12m":5404728},{"month":"2001-05","pax":457776,"rolling_12m":5388728},{"month":"2001-06","pax":509855,"rolling_12m":5432793},{"month":"2001-07","pax":448227,"rolling_12m":5431153},{"month":"2001-08","pax":373687,"rolling_12m":5428865},{"month":"2001-09","pax":440249,"rolling_12m":5403633},{"month":"2001-10","pax":423139,"rolling_12m":5359018},{"month":"2001-11","pax":373678,"rolling_12m":5313193},{"month":"2001-12","pax":363401,"rolling_12m":5243807},{"month":"2002-01","pax":402652,"rolling_12m":5195501},{"month":"2002-02","pax":412606,"rolling_12m":5161031},{"month":"2002-03","pax":468891,"rolling_12m":5143895},{"month":"2002-04","pax":469075,"rolling_12m":5143236},{"month":"2002-05","pax":442168,"rolling_12m":5127628},{"month":"2002-06","pax":489413,"rolling_12m":5107186},{"month":"2002-07","pax":456502,"rolling_12m":5115461},{"month":"2002-08","pax":389767,"rolling_12m":5131541},{"month":"2002-09","pax":464338,"rolling_12m":5155630},{"month":"2002-10","pax":488961,"rolling_12m":5221452},{"month":"2002-11","pax":412237,"rolling_12m":5260011},{"month":"2002-12","pax":439934,"rolling_12m":5336544},{"month":"2003-01","pax":434036,"rolling_12m":5367928},{"month":"2003-02","pax":407349,"rolling_12m":5362671},{"month":"2003-03","pax":462128,"rolling_12m":5355908},{"month":"2003-04","pax":431142,"rolling_12m":5317975},{"month":"2003-05","pax":410068,"rolling_12m":5285875},{"month":"2003-06","pax":483190,"rolling_12m":5279652},{"month":"2003-07","pax":465737,"rolling_12m":5288887},{"month":"2003-08","pax":402823,"rolling_12m":5301943},{"month":"2003-09","pax":462136,"rolling_12m":5299741},{"month":"2003-10","pax":488531,"rolling_12m":5299311},{"month":"2003-11","pax":416855,"rolling_12m":5303929},{"month":"2003-12","pax":440302,"rolling_12m":5304297},{"month":"2004-01","pax":432363,"rolling_12m":5302624},{"month":"2004-02","pax":444951,"rolling_12m":5340226},{"month":"2004-03","pax":482186,"rolling_12m":5360284},{"month":"2004-04","pax":481000,"rolling_12m":5410142},{"month":"2004-05","pax":479161,"rolling_12m":5479235},{"month":"2004-06","pax":529703,"rolling_12m":5525748},{"month":"2004-07","pax":485441,"rolling_12m":5545452},{"month":"2004-08","pax":414266,"rolling_12m":5556895},{"month":"2004-09","pax":488823,"rolling_12m":5583582},{"month":"2004-10","pax":495848,"rolling_12m":5590899},{"month":"2004-11","pax":429363,"rolling_12m":5603407},{"month":"2004-12","pax":449300,"rolling_12m":5612405},{"month":"2005-01","pax":471138,"rolling_12m":5651180},{"month":"2005-02","pax":438733,"rolling_12m":5644962},{"month":"2005-03","pax":497575,"rolling_12m":5660351},{"month":"2005-04","pax":494425,"rolling_12m":5673776},{"month":"2005-05","pax":517016,"rolling_12m":5711631},{"month":"2005-06","pax":532617,"rolling_12m":5714545},{"month":"2005-07","pax":510313,"rolling_12m":5739417},{"month":"2005-08","pax":416918,"rolling_12m":5742069},{"month":"2005-09","pax":507807,"rolling_12m":5761053},{"month":"2005-10","pax":502306,"rolling_12m":5767511},{"month":"2005-11","pax":446685,"rolling_12m":5784833},{"month":"2005-12","pax":463722,"rolling_12m":5799255},{"month":"2006-01","pax":465588,"rolling_12m":5793705},{"month":"2006-02","pax":437654,"rolling_12m":5792626},{"month":"2006-03","pax":496921,"rolling_12m":5791972},{"month":"2006-04","pax":500779,"rolling_12m":5798326},{"month":"2006-05","pax":538001,"rolling_12m":5819311},{"month":"2006-06","pax":562086,"rolling_12m":5848780},{"month":"2006-07","pax":523404,"rolling_12m":5861871},{"month":"2006-08","pax":440065,"rolling_12m":5885018},{"month":"2006-09","pax":528779,"rolling_12m":5905990},{"month":"2006-10","pax":531895,"rolling_12m":5935579},{"month":"2006-11","pax":462724,"rolling_12m":5951618},{"month":"2006-12","pax":472127,"rolling_12m":5960023},{"month":"2007-01","pax":460637,"rolling_12m":5955072},{"month":"2007-02","pax":449212,"rolling_12m":5966630},{"month":"2007-03","pax":525765,"rolling_12m":5995474},{"month":"2007-04","pax":521656,"rolling_12m":6016351},{"month":"2007-05","pax":529065,"rolling_12m":6007415},{"month":"2007-06","pax":590526,"rolling_12m":6035855},{"month":"2007-07","pax":566275,"rolling_12m":6078726},{"month":"2007-08","pax":477166,"rolling_12m":6115827},{"month":"2007-09","pax":556860,"rolling_12m":6143908},{"month":"2007-10","pax":535713,"rolling_12m":6147726},{"month":"2007-11","pax":481957,"rolling_12m":6166959},{"month":"2007-12","pax":479097,"rolling_12m":6173929},{"month":"2008-01","pax":471244,"rolling_12m":6184536},{"month":"2008-02","pax":470947,"rolling_12m":6206271},{"month":"2008-03","pax":537494,"rolling_12m":6218000},{"month":"2008-04","pax":560752,"rolling_12m":6257096},{"month":"2008-05","pax":561615,"rolling_12m":6289646},{"month":"2008-06","pax":611378,"rolling_12m":6310498},{"month":"2008-07","pax":571685,"rolling_12m":6315908},{"month":"2008-08","pax":486895,"rolling_12m":6325637},{"month":"2008-09","pax":551380,"rolling_12m":6320157},{"month":"2008-10","pax":568946,"rolling_12m":6353390},{"month":"2008-11","pax":479334,"rolling_12m":6350767},{"month":"2008-12","pax":499314,"rolling_12m":6370984},{"month":"2009-01","pax":444342,"rolling_12m":6344082},{"month":"2009-02","pax":477722,"rolling_12m":6350857},{"month":"2009-03","pax":520319,"rolling_12m":6333682},{"month":"2009-04","pax":562644,"rolling_12m":6335574},{"month":"2009-05","pax":555542,"rolling_12m":6329501},{"month":"2009-06","pax":596707,"rolling_12m":6314830},{"month":"2009-07","pax":558387,"rolling_12m":6301532},{"month":"2009-08","pax":482028,"rolling_12m":6296665},{"month":"2009-09","pax":552649,"rolling_12m":6297934},{"month":"2009-10","pax":554167,"rolling_12m":6283155},{"month":"2009-11","pax":500641,"rolling_12m":6304462},{"month":"2009-12","pax":496353,"rolling_12m":6301501},{"month":"2010-01","pax":451742,"rolling_12m":6308901},{"month":"2010-02","pax":463985,"rolling_12m":6295164},{"month":"2010-03","pax":548962,"rolling_12m":6323807},{"month":"2010-04","pax":505062,"rolling_12m":6266225},{"month":"2010-05","pax":590807,"rolling_12m":6301490},{"month":"2010-06","pax":612924,"rolling_12m":6317707},{"month":"2010-07","pax":568055,"rolling_12m":6327375},{"month":"2010-08","pax":493435,"rolling_12m":6338782},{"month":"2010-09","pax":572134,"rolling_12m":6358267},{"month":"2010-10","pax":574465,"rolling_12m":6378565},{"month":"2010-11","pax":533442,"rolling_12m":6411366},{"month":"2010-12","pax":510296,"rolling_12m":6425309},{"month":"2011-01","pax":511358,"rolling_12m":6484925},{"month":"2011-02","pax":497769,"rolling_12m":6518709},{"month":"2011-03","pax":581855,"rolling_12m":6551602},{"month":"2011-04","pax":588680,"rolling_12m":6635220},{"month":"2011-05","pax":651399,"rolling_12m":6695812},{"month":"2011-06","pax":655961,"rolling_12m":6738849},{"month":"2011-07","pax":621336,"rolling_12m":6792130},{"month":"2011-08","pax":534752,"rolling_12m":6833447},{"month":"2011-09","pax":629976,"rolling_12m":6891289},{"month":"2011-10","pax":616711,"rolling_12m":6933535},{"month":"2011-11","pax":552674,"rolling_12m":6952767},{"month":"2011-12","pax":564770,"rolling_12m":7007241},{"month":"2012-01","pax":521126,"rolling_12m":7017009},{"month":"2012-02","pax":507837,"rolling_12m":7027077},{"month":"2012-03","pax":596131,"rolling_12m":7041353},{"month":"2012-04","pax":669763,"rolling_12m":7122436},{"month":"2012-05","pax":682576,"rolling_12m":7153613},{"month":"2012-06","pax":730040,"rolling_12m":7227692},{"month":"2012-07","pax":699580,"rolling_12m":7305936},{"month":"2012-08","pax":613886,"rolling_12m":7385070},{"month":"2012-09","pax":689306,"rolling_12m":7444400},{"month":"2012-10","pax":676038,"rolling_12m":7503727},{"month":"2012-11","pax":609289,"rolling_12m":7560342},{"month":"2012-12","pax":586744,"rolling_12m":7582316},{"month":"2013-01","pax":527747,"rolling_12m":7588937},{"month":"2013-02","pax":538509,"rolling_12m":7619609},{"month":"2013-03","pax":642517,"rolling_12m":7665995},{"month":"2013-04","pax":669344,"rolling_12m":7665576},{"month":"2013-05","pax":688593,"rolling_12m":7671593},{"month":"2013-06","pax":694331,"rolling_12m":7635884},{"month":"2013-07","pax":681299,"rolling_12m":7617603},{"month":"2013-08","pax":610669,"rolling_12m":7614386},{"month":"2013-09","pax":686189,"rolling_12m":7611269},{"month":"2013-10","pax":675135,"rolling_12m":7610366},{"month":"2013-11","pax":590684,"rolling_12m":7591761},{"month":"2013-12","pax":588309,"rolling_12m":7593326},{"month":"2014-01","pax":532791,"rolling_12m":7598370},{"month":"2014-02","pax":538150,"rolling_12m":7598011},{"month":"2014-03","pax":639529,"rolling_12m":7595023},{"month":"2014-04","pax":652329,"rolling_12m":7578008},{"month":"2014-05","pax":680973,"rolling_12m":7570388},{"month":"2014-06","pax":725557,"rolling_12m":7601614},{"month":"2014-07","pax":674006,"rolling_12m":7594321},{"month":"2014-08","pax":624200,"rolling_12m":7607852},{"month":"2014-09","pax":602803,"rolling_12m":7524466},{"month":"2014-10","pax":688117,"rolling_12m":7537448},{"month":"2014-11","pax":579799,"rolling_12m":7526563},{"month":"2014-12","pax":600811,"rolling_12m":7539065},{"month":"2015-01","pax":529501,"rolling_12m":7535775},{"month":"2015-02","pax":549332,"rolling_12m":7546957},{"month":"2015-03","pax":619692,"rolling_12m":7527120},{"month":"2015-04","pax":651311,"rolling_12m":7526102},{"month":"2015-05","pax":694501,"rolling_12m":7539630},{"month":"2015-06","pax":733613,"rolling_12m":7547686},{"month":"2015-07","pax":691373,"rolling_12m":7565053},{"month":"2015-08","pax":648671,"rolling_12m":7589524},{"month":"2015-09","pax":704884,"rolling_12m":7691605},{"month":"2015-10","pax":705657,"rolling_12m":7709145},{"month":"2015-11","pax":568294,"rolling_12m":7697640},{"month":"2015-12","pax":587903,"rolling_12m":7684732},{"month":"2016-01","pax":538206,"rolling_12m":7693437},{"month":"2016-02","pax":570538,"rolling_12m":7714643},{"month":"2016-03","pax":627639,"rolling_12m":7722590},{"month":"2016-04","pax":685456,"rolling_12m":7756735},{"month":"2016-05","pax":730594,"rolling_12m":7792828},{"month":"2016-06","pax":749459,"rolling_12m":7808674},{"month":"2016-07","pax":715937,"rolling_12m":7833238},{"month":"2016-08","pax":644629,"rolling_12m":7829196},{"month":"2016-09","pax":732882,"rolling_12m":7857194},{"month":"2016-10","pax":743887,"rolling_12m":7895424},{"month":"2016-11","pax":667632,"rolling_12m":7994762},{"month":"2016-12","pax":697103,"rolling_12m":8103962},{"month":"2017-01","pax":627584,"rolling_12m":8193340},{"month":"2017-02","pax":653763,"rolling_12m":8276565},{"month":"2017-03","pax":722554,"rolling_12m":8371480},{"month":"2017-04","pax":810062,"rolling_12m":8496086},{"month":"2017-05","pax":824063,"rolling_12m":8589555},{"month":"2017-06","pax":854852,"rolling_12m":8694948},{"month":"2017-07","pax":856932,"rolling_12m":8835943},{"month":"2017-08","pax":792900,"rolling_12m":8984214},{"month":"2017-09","pax":833825,"rolling_12m":9085157},{"month":"2017-10","pax":846916,"rolling_12m":9188186},{"month":"2017-11","pax":726536,"rolling_12m":9247090},{"month":"2017-12","pax":736721,"rolling_12m":9286708},{"month":"2018-01","pax":680921,"rolling_12m":9340045},{"month":"2018-02","pax":669517,"rolling_12m":9355799},{"month":"2018-03","pax":770256,"rolling_12m":9403501},{"month":"2018-04","pax":853331,"rolling_12m":9446770},{"month":"2018-05","pax":854959,"rolling_12m":9477666},{"month":"2018-06","pax":889576,"rolling_12m":9512390},{"month":"2018-07","pax":883742,"rolling_12m":9539200},{"month":"2018-08","pax":807439,"rolling_12m":9553739},{"month":"2018-09","pax":871657,"rolling_12m":9591571},{"month":"2018-10","pax":891230,"rolling_12m":9635885},{"month":"2018-11","pax":737722,"rolling_12m":9647071},{"month":"2018-12","pax":742039,"rolling_12m":9652389},{"month":"2019-01","pax":675219,"rolling_12m":9646687},{"month":"2019-02","pax":676841,"rolling_12m":9654011},{"month":"2019-03","pax":811954,"rolling_12m":9695709},{"month":"2019-04","pax":840486,"rolling_12m":9682864},{"month":"2019-05","pax":841326,"rolling_12m":9669231},{"month":"2019-06","pax":897004,"rolling_12m":9676659},{"month":"2019-07","pax":852677,"rolling_12m":9645594},{"month":"2019-08","pax":778863,"rolling_12m":9617018},{"month":"2019-09","pax":861556,"rolling_12m":9606917},{"month":"2019-10","pax":890456,"rolling_12m":9606143},{"month":"2019-11","pax":774797,"rolling_12m":9643218},{"month":"2019-12","pax":734935,"rolling_12m":9636114},{"month":"2020-01","pax":729570,"rolling_12m":9690465},{"month":"2020-02","pax":738208,"rolling_12m":9751832},{"month":"2020-03","pax":344447,"rolling_12m":9284325},{"month":"2020-04","pax":4820,"rolling_12m":8448659},{"month":"2020-05","pax":10460,"rolling_12m":7617793},{"month":"2020-06","pax":51215,"rolling_12m":6772004},{"month":"2020-07","pax":209999,"rolling_12m":6129326},{"month":"2020-08","pax":293556,"rolling_12m":5644019},{"month":"2020-09","pax":258881,"rolling_12m":5041344},{"month":"2020-10","pax":244003,"rolling_12m":4394891},{"month":"2020-11","pax":71530,"rolling_12m":3691624},{"month":"2020-12","pax":180886,"rolling_12m":3137575},{"month":"2021-01","pax":162004,"rolling_12m":2570009},{"month":"2021-02","pax":123014,"rolling_12m":1954815},{"month":"2021-03","pax":125344,"rolling_12m":1735712},{"month":"2021-04","pax":104449,"rolling_12m":1835341},{"month":"2021-05","pax":168859,"rolling_12m":1993740},{"month":"2021-06","pax":290519,"rolling_12m":2233044},{"month":"2021-07","pax":433310,"rolling_12m":2456355},{"month":"2021-08","pax":464239,"rolling_12m":2627038},{"month":"2021-09","pax":467188,"rolling_12m":2835345},{"month":"2021-10","pax":518279,"rolling_12m":3109621},{"month":"2021-11","pax":500200,"rolling_12m":3538291},{"month":"2021-12","pax":470142,"rolling_12m":3827547},{"month":"2022-01","pax":294729,"rolling_12m":3960272},{"month":"2022-02","pax":406222,"rolling_12m":4243480},{"month":"2022-03","pax":531458,"rolling_12m":4649594},{"month":"2022-04","pax":608061,"rolling_12m":5153206},{"month":"2022-05","pax":701409,"rolling_12m":5685756},{"month":"2022-06","pax":710120,"rolling_12m":6105357},{"month":"2022-07","pax":640023,"rolling_12m":6312070},{"month":"2022-08","pax":612637,"rolling_12m":6460468},{"month":"2022-09","pax":654425,"rolling_12m":6647705},{"month":"2022-10","pax":680294,"rolling_12m":6809720},{"month":"2022-11","pax":577368,"rolling_12m":6886888},{"month":"2022-12","pax":630183,"rolling_12m":7046929},{"month":"2023-01","pax":529314,"rolling_12m":7281514},{"month":"2023-02","pax":553011,"rolling_12m":7428303},{"month":"2023-03","pax":573526,"rolling_12m":7470371},{"month":"2023-04","pax":655097,"rolling_12m":7517407},{"month":"2023-05","pax":727321,"rolling_12m":7543319},{"month":"2023-06","pax":738355,"rolling_12m":7571554},{"month":"2023-07","pax":693864,"rolling_12m":7625395},{"month":"2023-08","pax":689746,"rolling_12m":7702504},{"month":"2023-09","pax":739860,"rolling_12m":7787939},{"month":"2023-10","pax":731874,"rolling_12m":7839519},{"month":"2023-11","pax":570537,"rolling_12m":7832688},{"month":"2023-12","pax":613853,"rolling_12m":7816358},{"month":"2024-01","pax":523698,"rolling_12m":7810742},{"month":"2024-02","pax":567572,"rolling_12m":7825303},{"month":"2024-03","pax":632083,"rolling_12m":7883860},{"month":"2024-04","pax":697185,"rolling_12m":7925948},{"month":"2024-05","pax":729167,"rolling_12m":7927794},{"month":"2024-06","pax":716417,"rolling_12m":7905856},{"month":"2024-07","pax":692159,"rolling_12m":7904151},{"month":"2024-08","pax":682565,"rolling_12m":7896970},{"month":"2024-09","pax":708187,"rolling_12m":7865297},{"month":"2024-10","pax":707137,"rolling_12m":7840560},{"month":"2024-11","pax":574289,"rolling_12m":7844312},{"month":"2024-12","pax":623421,"rolling_12m":7853880},{"month":"2025-01","pax":533951,"rolling_12m":7864133},{"month":"2025-02","pax":559489,"rolling_12m":7856050},{"month":"2025-03","pax":636376,"rolling_12m":7860343},{"month":"2025-04","pax":674671,"rolling_12m":7837829},{"month":"2025-05","pax":690373,"rolling_12m":7799035},{"month":"2025-06","pax":697760,"rolling_12m":7780378},{"month":"2025-07","pax":631166,"rolling_12m":7719385},{"month":"2025-08","pax":629609,"rolling_12m":7666429},{"month":"2025-09","pax":667741,"rolling_12m":7625983},{"month":"2025-10","pax":698430,"rolling_12m":7617276},{"month":"2025-11","pax":587869,"rolling_12m":7630856},{"month":"2025-12","pax":623546,"rolling_12m":7630981}],"forecast":[{"month":"2026-01","model":"ensemble","pax":535762,"lo80":512683,"hi80":559880,"lo95":500872,"hi95":573083},{"month":"2026-02","model":"ensemble","pax":561293,"lo80":532536,"hi80":591603,"lo95":517914,"hi95":608305},{"month":"2026-03","model":"ensemble","pax":630720,"lo80":594023,"hi80":669684,"lo95":575469,"hi95":691275},{"month":"2026-04","model":"ensemble","pax":676432,"lo80":632921,"hi80":722935,"lo95":611032,"hi95":748833},{"month":"2026-05","model":"ensemble","pax":698237,"lo80":649444,"hi80":750695,"lo95":625011,"hi95":780042},{"month":"2026-06","model":"ensemble","pax":704538,"lo80":651711,"hi80":761648,"lo95":625368,"hi95":793731},{"month":"2026-07","model":"ensemble","pax":647547,"lo80":595923,"hi80":703643,"lo95":570283,"hi95":735279},{"month":"2026-08","model":"ensemble","pax":639604,"lo80":585772,"hi80":698382,"lo95":559135,"hi95":731653},{"month":"2026-09","model":"ensemble","pax":677882,"lo80":617990,"hi80":743580,"lo95":588457,"hi95":780898},{"month":"2026-10","model":"ensemble","pax":700552,"lo80":635873,"hi80":771811,"lo95":604087,"hi95":812422},{"month":"2026-11","model":"ensemble","pax":583939,"lo80":527815,"hi80":646030,"lo95":500323,"hi95":681529},{"month":"2026-12","model":"ensemble","pax":620037,"lo80":558199,"hi80":688726,"lo95":528001,"hi95":728116},{"month":"2027-01","model":"ensemble","pax":533445,"lo80":475917,"hi80":597926,"lo95":448019,"hi95":635159},{"month":"2027-02","model":"ensemble","pax":558865,"lo80":495365,"hi80":630505,"lo95":464725,"hi95":672075},{"month":"2027-03","model":"ensemble","pax":628025,"lo80":553244,"hi80":712915,"lo95":517332,"hi95":762403},{"month":"2027-04","model":"ensemble","pax":673509,"lo80":589832,"hi80":769056,"lo95":549831,"hi95":825006},{"month":"2027-05","model":"ensemble","pax":695193,"lo80":605403,"hi80":798299,"lo95":562666,"hi95":858934},{"month":"2027-06","model":"ensemble","pax":701472,"lo80":607575,"hi80":809880,"lo95":563069,"hi95":873894},{"month":"2027-07","model":"ensemble","pax":644685,"lo80":555485,"hi80":748208,"lo95":513376,"hi95":809579},{"month":"2027-08","model":"ensemble","pax":636803,"lo80":545937,"hi80":742794,"lo95":503207,"hi95":805868},{"month":"2027-09","model":"ensemble","pax":674917,"lo80":575796,"hi80":791101,"lo95":529360,"hi95":860495},{"month":"2027-10","model":"ensemble","pax":697523,"lo80":592272,"hi80":821478,"lo95":543146,"hi95":895779},{"month":"2027-11","model":"ensemble","pax":581439,"lo80":491438,"hi80":687921,"lo95":449580,"hi95":751971},{"month":"2027-12","model":"ensemble","pax":617380,"lo80":519485,"hi80":733722,"lo95":474112,"hi95":803939},{"month":"2026-01","model":"sarima","pax":537573,"lo80":514417,"hi80":561772,"lo95":502565,"hi95":575021},{"month":"2026-02","model":"sarima","pax":563097,"lo80":534247,"hi80":593504,"lo95":519578,"hi95":610260},{"month":"2026-03","model":"sarima","pax":625064,"lo80":588696,"hi80":663678,"lo95":570309,"hi95":685076},{"month":"2026-04","model":"sarima","pax":678194,"lo80":634569,"hi80":724818,"lo95":612623,"hi95":750782},{"month":"2026-05","model":"sarima","pax":706101,"lo80":656758,"hi80":759150,"lo95":632050,"hi95":788827},{"month":"2026-06","model":"sarima","pax":711317,"lo80":657981,"hi80":768976,"lo95":631385,"hi95":801368},{"month":"2026-07","model":"sarima","pax":663928,"lo80":610998,"hi80":721443,"lo95":584709,"hi95":753879},{"month":"2026-08","model":"sarima","pax":649598,"lo80":594926,"hi80":709295,"lo95":567872,"hi95":743086},{"month":"2026-09","model":"sarima","pax":688024,"lo80":627235,"hi80":754704,"lo95":597261,"hi95":792580},{"month":"2026-10","model":"sarima","pax":702675,"lo80":637799,"hi80":774149,"lo95":605917,"hi95":814883},{"month":"2026-11","model":"sarima","pax":580009,"lo80":524263,"hi80":641682,"lo95":496955,"hi95":676942},{"month":"2026-12","model":"sarima","pax":616529,"lo80":555041,"hi80":684829,"lo95":525013,"hi95":723996},{"month":"2027-01","model":"sarima","pax":532939,"lo80":475465,"hi80":597359,"lo95":447594,"hi95":634556},{"month":"2027-02","model":"sarima","pax":558242,"lo80":494813,"hi80":629802,"lo95":464207,"hi95":671325},{"month":"2027-03","model":"sarima","pax":619675,"lo80":545888,"hi80":703435,"lo95":510454,"hi95":752266},{"month":"2027-04","model":"sarima","pax":672347,"lo80":588815,"hi80":767729,"lo95":548882,"hi95":823583},{"month":"2027-05","model":"sarima","pax":700013,"lo80":609601,"hi80":803834,"lo95":566567,"hi95":864889},{"month":"2027-06","model":"sarima","pax":705184,"lo80":610790,"hi80":814166,"lo95":566049,"hi95":878518},{"month":"2027-07","model":"sarima","pax":658204,"lo80":567133,"hi80":763898,"lo95":524141,"hi95":826556},{"month":"2027-08","model":"sarima","pax":643998,"lo80":552104,"hi80":751186,"lo95":508892,"hi95":814972},{"month":"2027-09","model":"sarima","pax":682092,"lo80":581917,"hi80":799512,"lo95":534989,"hi95":869644},{"month":"2027-10","model":"sarima","pax":696616,"lo80":591502,"hi80":820410,"lo95":542440,"hi95":894614},{"month":"2027-11","model":"sarima","pax":575008,"lo80":486003,"hi80":680313,"lo95":444607,"hi95":743654},{"month":"2027-12","model":"sarima","pax":611213,"lo80":514296,"hi80":726394,"lo95":469377,"hi95":795910},{"month":"2026-01","model":"seasonal_naive","pax":533951,"lo80":533951,"hi80":533951,"lo95":533951,"hi95":533951},{"month":"2026-02","model":"seasonal_naive","pax":559489,"lo80":559489,"hi80":559489,"lo95":559489,"hi95":559489},{"month":"2026-03","model":"seasonal_naive","pax":636376,"lo80":636376,"hi80":636376,"lo95":636376,"hi95":636376},{"month":"2026-04","model":"seasonal_naive","pax":674671,"lo80":674671,"hi80":674671,"lo95":674671,"hi95":674671},{"month":"2026-05","model":"seasonal_naive","pax":690373,"lo80":690373,"hi80":690373,"lo95":690373,"hi95":690373},{"month":"2026-06","model":"seasonal_naive","pax":697760,"lo80":697760,"hi80":697760,"lo95":697760,"hi95":697760},{"month":"2026-07","model":"seasonal_naive","pax":631166,"lo80":631166,"hi80":631166,"lo95":631166,"hi95":631166},{"month":"2026-08","model":"seasonal_naive","pax":629609,"lo80":629609,"hi80":629609,"lo95":629609,"hi95":629609},{"month":"2026-09","model":"seasonal_naive","pax":667741,"lo80":667741,"hi80":667741,"lo95":667741,"hi95":667741},{"month":"2026-10","model":"seasonal_naive","pax":698430,"lo80":698430,"hi80":698430,"lo95":698430,"hi95":698430},{"month":"2026-11","model":"seasonal_naive","pax":587869,"lo80":587869,"hi80":587869,"lo95":587869,"hi95":587869},{"month":"2026-12","model":"seasonal_naive","pax":623546,"lo80":623546,"hi80":623546,"lo95":623546,"hi95":623546},{"month":"2027-01","model":"seasonal_naive","pax":533951,"lo80":533951,"hi80":533951,"lo95":533951,"hi95":533951},{"month":"2027-02","model":"seasonal_naive","pax":559489,"lo80":559489,"hi80":559489,"lo95":559489,"hi95":559489},{"month":"2027-03","model":"seasonal_naive","pax":636376,"lo80":636376,"hi80":636376,"lo95":636376,"hi95":636376},{"month":"2027-04","model":"seasonal_naive","pax":674671,"lo80":674671,"hi80":674671,"lo95":674671,"hi95":674671},{"month":"2027-05","model":"seasonal_naive","pax":690373,"lo80":690373,"hi80":690373,"lo95":690373,"hi95":690373},{"month":"2027-06","model":"seasonal_naive","pax":697760,"lo80":697760,"hi80":697760,"lo95":697760,"hi95":697760},{"month":"2027-07","model":"seasonal_naive","pax":631166,"lo80":631166,"hi80":631166,"lo95":631166,"hi95":631166},{"month":"2027-08","model":"seasonal_naive","pax":629609,"lo80":629609,"hi80":629609,"lo95":629609,"hi95":629609},{"month":"2027-09","model":"seasonal_naive","pax":667741,"lo80":667741,"hi80":667741,"lo95":667741,"hi95":667741},{"month":"2027-10","model":"seasonal_naive","pax":698430,"lo80":698430,"hi80":698430,"lo95":698430,"hi95":698430},{"month":"2027-11","model":"seasonal_naive","pax":587869,"lo80":587869,"hi80":587869,"lo95":587869,"hi95":587869},{"month":"2027-12","model":"seasonal_naive","pax":623546,"lo80":623546,"hi80":623546,"lo95":623546,"hi95":623546}],"recovery":[{"icao":"LFOB","name":"BEAUVAIS-TILLE","pax_2019":3982532,"pax_2025":6676329,"recovery_pct":167.6},{"icao":"LFML","name":"MARSEILLE-PROVENCE","pax_2019":10149788,"pax_2025":11259900,"recovery_pct":110.9},{"icao":"LFSB","name":"BALE-MULHOUSE","pax_2019":9074905,"pax_2025":9622045,"recovery_pct":106.0},{"icao":"LFMN","name":"NICE-COTE D'AZUR","pax_2019":14484544,"pax_2025":15227140,"recovery_pct":105.1},{"icao":"LFRS","name":"NANTES-ATLANTIQUE","pax_2019":7225623,"pax_2025":7182265,"recovery_pct":99.4},{"icao":"LFLL","name":"LYON-ST-EXUPERY","pax_2019":11730916,"pax_2025":10666444,"recovery_pct":90.9},{"icao":"LFMT","name":"MONTPELLIER-MEDITERRANEE","pax_2019":1935912,"pax_2025":1688180,"recovery_pct":87.2},{"icao":"LFBO","name":"TOULOUSE-BLAGNAC","pax_2019":9636114,"pax_2025":7630981,"recovery_pct":79.2},{"icao":"LFQQ","name":"LILLE-LESQUIN","pax_2019":2188910,"pax_2025":1705639,"recovery_pct":77.9},{"icao":"LFBD","name":"BORDEAUX-MERIGNAC","pax_2019":7692945,"pax_2025":5873275,"recovery_pct":76.3}],"seasonality":[{"decade":1990,"month":1,"share_pct":7.91},{"decade":1990,"month":2,"share_pct":7.74},{"decade":1990,"month":3,"share_pct":8.78},{"decade":1990,"month":4,"share_pct":8.75},{"decade":1990,"month":5,"share_pct":8.67},{"decade":1990,"month":6,"share_pct":9.41},{"decade":1990,"month":7,"share_pct":8.11},{"decade":1990,"month":8,"share_pct":6.98},{"decade":1990,"month":9,"share_pct":8.86},{"decade":1990,"month":10,"share_pct":8.84},{"decade":1990,"month":11,"share_pct":7.82},{"decade":1990,"month":12,"share_pct":8.12},{"decade":2000,"month":1,"share_pct":7.78},{"decade":2000,"month":2,"share_pct":7.71},{"decade":2000,"month":3,"share_pct":8.66},{"decade":2000,"month":4,"share_pct":8.6},{"decade":2000,"month":5,"share_pct":8.63},{"decade":2000,"month":6,"share_pct":9.34},{"decade":2000,"month":7,"share_pct":8.75},{"decade":2000,"month":8,"share_pct":7.4},{"decade":2000,"month":9,"share_pct":8.73},{"decade":2000,"month":10,"share_pct":8.8},{"decade":2000,"month":11,"share_pct":7.69},{"decade":2000,"month":12,"share_pct":7.9},{"decade":2010,"month":1,"share_pct":6.96},{"decade":2010,"month":2,"share_pct":7.04},{"decade":2010,"month":3,"share_pct":8.16},{"decade":2010,"month":4,"share_pct":8.58},{"decade":2010,"month":5,"share_pct":9.01},{"decade":2010,"month":6,"share_pct":9.38},{"decade":2010,"month":7,"share_pct":8.99},{"decade":2010,"month":8,"share_pct":8.11},{"decade":2010,"month":9,"share_pct":8.92},{"decade":2010,"month":10,"share_pct":9.06},{"decade":2010,"month":11,"share_pct":7.88},{"decade":2010,"month":12,"share_pct":7.9},{"decade":2020,"month":1,"share_pct":6.15},{"decade":2020,"month":2,"share_pct":6.85},{"decade":2020,"month":3,"share_pct":7.82},{"decade":2020,"month":4,"share_pct":8.68},{"decade":2020,"month":5,"share_pct":9.4},{"decade":2020,"month":6,"share_pct":9.45},{"decade":2020,"month":7,"share_pct":8.76},{"decade":2020,"month":8,"share_pct":8.61},{"decade":2020,"month":9,"share_pct":9.13},{"decade":2020,"month":10,"share_pct":9.29},{"decade":2020,"month":11,"share_pct":7.63},{"decade":2020,"month":12,"share_pct":8.23}],"route_islands":[{"dest_icao":"CYUL","dest_name":"MONTREAL-DORVAL","dest_zone":"FOREIGN","start":"2025-07","end":"2025-07","months":1,"pax":16617},{"dest_icao":"DAOO","dest_name":"ORAN-AHMED BENBELLA","dest_zone":"FOREIGN","start":"2025-07","end":"2025-07","months":1,"pax":10051},{"dest_icao":"DTTA","dest_name":"TUNIS","dest_zone":"FOREIGN","start":"2025-10","end":"2025-10","months":1,"pax":10444},{"dest_icao":"EBBR","dest_name":"BRUXELLES-ZAVENTEM","dest_zone":"FOREIGN","start":"2006-05","end":"2006-06","months":2,"pax":16542},{"dest_icao":"EBBR","dest_name":"BRUXELLES-ZAVENTEM","dest_zone":"FOREIGN","start":"2012-04","end":"2016-03","months":48,"pax":686364},{"dest_icao":"EBBR","dest_name":"BRUXELLES-ZAVENTEM","dest_zone":"FOREIGN","start":"2018-01","end":"2018-01","months":1,"pax":12334},{"dest_icao":"EBBR","dest_name":"BRUXELLES-ZAVENTEM","dest_zone":"FOREIGN","start":"2022-03","end":"2022-03","months":1,"pax":8956},{"dest_icao":"EBBR","dest_name":"BRUXELLES-ZAVENTEM","dest_zone":"FOREIGN","start":"2025-09","end":"2025-09","months":1,"pax":13217},{"dest_icao":"EDDB","dest_name":"BERLIN-BRANDEBOURG","dest_zone":"FOREIGN","start":"2016-12","end":"2016-12","months":1,"pax":10970},{"dest_icao":"EDDB","dest_name":"BERLIN-BRANDEBOURG","dest_zone":"FOREIGN","start":"2017-02","end":"2017-02","months":1,"pax":10526},{"dest_icao":"EDDB","dest_name":"BERLIN-BRANDEBOURG","dest_zone":"FOREIGN","start":"2017-05","end":"2017-05","months":1,"pax":11870},{"dest_icao":"EDDB","dest_name":"BERLIN-BRANDEBOURG","dest_zone":"FOREIGN","start":"2017-09","end":"2017-09","months":1,"pax":13361},{"dest_icao":"EDDB","dest_name":"BERLIN-BRANDEBOURG","dest_zone":"FOREIGN","start":"2017-11","end":"2017-11","months":1,"pax":10542},{"dest_icao":"EDDB","dest_name":"BERLIN-BRANDEBOURG","dest_zone":"FOREIGN","start":"2018-02","end":"2018-10","months":9,"pax":113330},{"dest_icao":"EDDF","dest_name":"FRANCFORT","dest_zone":"FOREIGN","start":"2017-09","end":"2018-03","months":7,"pax":151110},{"dest_icao":"EDDH","dest_name":"HAMBOURG","dest_zone":"FOREIGN","start":"2002-05","end":"2002-06","months":2,"pax":9676},{"dest_icao":"EDDH","dest_name":"HAMBOURG","dest_zone":"FOREIGN","start":"2002-09","end":"2002-10","months":2,"pax":11862},{"dest_icao":"EDDH","dest_name":"HAMBOURG","dest_zone":"FOREIGN","start":"2003-02","end":"2003-02","months":1,"pax":6017},{"dest_icao":"EDDH","dest_name":"HAMBOURG","dest_zone":"FOREIGN","start":"2003-04","end":"2003-06","months":3,"pax":16706},{"dest_icao":"EDDH","dest_name":"HAMBOURG","dest_zone":"FOREIGN","start":"2003-09","end":"2003-12","months":4,"pax":25263},{"dest_icao":"EDDM","dest_name":"MUNICH","dest_zone":"FOREIGN","start":"2003-07","end":"2003-07","months":1,"pax":10649},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2000-03","end":"2000-03","months":1,"pax":2434},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2000-11","end":"2000-11","months":1,"pax":3390},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2001-01","end":"2001-01","months":1,"pax":3508},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2001-03","end":"2001-04","months":2,"pax":7671},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2001-09","end":"2001-11","months":3,"pax":14572},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2004-01","end":"2004-06","months":6,"pax":39828},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2004-08","end":"2008-03","months":44,"pax":296300},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2008-07","end":"2008-07","months":1,"pax":6373},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2008-09","end":"2008-10","months":2,"pax":14298},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2009-05","end":"2009-05","months":1,"pax":5588},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2009-08","end":"2009-10","months":3,"pax":18434},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2009-12","end":"2010-02","months":3,"pax":17458},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2010-04","end":"2010-04","months":1,"pax":4483},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2010-09","end":"2010-11","months":3,"pax":17939},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2012-05","end":"2012-05","months":1,"pax":6579},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2013-04","end":"2013-05","months":2,"pax":15325},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2013-07","end":"2013-07","months":1,"pax":6170},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2013-09","end":"2013-09","months":1,"pax":9148},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2014-02","end":"2014-02","months":1,"pax":8383},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2014-04","end":"2014-04","months":1,"pax":8070},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2015-01","end":"2015-05","months":5,"pax":35920},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2015-12","end":"2016-02","months":3,"pax":20140},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2016-05","end":"2016-05","months":1,"pax":7159},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2016-09","end":"2016-09","months":1,"pax":8297},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2016-11","end":"2016-11","months":1,"pax":8408},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2017-01","end":"2017-01","months":1,"pax":6968},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2017-04","end":"2017-04","months":1,"pax":6799},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2017-09","end":"2017-09","months":1,"pax":7512},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2017-11","end":"2017-11","months":1,"pax":8249},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2018-06","end":"2018-06","months":1,"pax":9008},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2019-02","end":"2019-02","months":1,"pax":4651},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2019-06","end":"2019-07","months":2,"pax":13818},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2019-10","end":"2019-11","months":2,"pax":15162},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2020-01","end":"2020-01","months":1,"pax":7352},{"dest_icao":"EDHI","dest_name":"HAMBOURG-FINKENWERDER","dest_zone":"FOREIGN","start":"2021-11","end":"2021-11","months":1,"pax":2145},{"dest_icao":"EGCC","dest_name":"MANCHESTER","dest_zone":"FOREIGN","start":"2002-03","end":"2002-03","months":1,"pax":10175},{"dest_icao":"EGCC","dest_name":"MANCHESTER","dest_zone":"FOREIGN","start":"2005-01","end":"2005-01","months":1,"pax":11431},{"dest_icao":"EGGD","dest_name":"BRISTOL","dest_zone":"FOREIGN","start":"2006-08","end":"2006-08","months":1,"pax":11085},{"dest_icao":"EGGD","dest_name":"BRISTOL","dest_zone":"FOREIGN","start":"2013-04","end":"2013-04","months":1,"pax":9888},{"dest_icao":"EGGD","dest_name":"BRISTOL","dest_zone":"FOREIGN","start":"2014-06","end":"2014-07","months":2,"pax":21205},{"dest_icao":"EGGD","dest_name":"BRISTOL","dest_zone":"FOREIGN","start":"2014-09","end":"2014-10","months":2,"pax":19433},{"dest_icao":"EGGD","dest_name":"BRISTOL","dest_zone":"FOREIGN","start":"2015-09","end":"2015-09","months":1,"pax":9631},{"dest_icao":"EGGD","dest_name":"BRISTOL","dest_zone":"FOREIGN","start":"2018-04","end":"2018-10","months":7,"pax":73505},{"dest_icao":"EGGD","dest_name":"BRISTOL","dest_zone":"FOREIGN","start":"2019-06","end":"2019-06","months":1,"pax":10790},{"dest_icao":"EGGD","dest_name":"BRISTOL","dest_zone":"FOREIGN","start":"2019-09","end":"2019-09","months":1,"pax":10691},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"1991-02","end":"1991-03","months":2,"pax":25567},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"1992-01","end":"1992-03","months":3,"pax":41842},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"1993-01","end":"1993-03","months":3,"pax":42288},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"1994-01","end":"1994-04","months":4,"pax":61794},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"1994-12","end":"1995-04","months":5,"pax":79329},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"1995-12","end":"1996-04","months":5,"pax":101891},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"1996-12","end":"1997-04","months":5,"pax":101785},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"1997-12","end":"1998-03","months":4,"pax":99123},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"1998-12","end":"1999-03","months":4,"pax":90994},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"1999-12","end":"2000-03","months":4,"pax":88555},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2000-12","end":"2001-04","months":5,"pax":99604},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2001-12","end":"2002-03","months":4,"pax":95234},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2002-12","end":"2003-03","months":4,"pax":94707},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2003-12","end":"2004-05","months":6,"pax":185111},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2004-07","end":"2004-08","months":2,"pax":74028},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2004-12","end":"2005-04","months":5,"pax":168364},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2005-12","end":"2006-04","months":5,"pax":158865},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2006-09","end":"2006-10","months":2,"pax":65123},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2006-12","end":"2007-04","months":5,"pax":153863},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2007-06","end":"2007-06","months":1,"pax":34462},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2007-08","end":"2007-08","months":1,"pax":42014},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2007-10","end":"2007-10","months":1,"pax":31837},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2007-12","end":"2008-04","months":5,"pax":173501},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2008-09","end":"2008-09","months":1,"pax":34181},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2008-12","end":"2009-03","months":4,"pax":124401},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2010-01","end":"2010-03","months":3,"pax":75669},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2011-01","end":"2011-03","months":3,"pax":71868},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2018-03","end":"2018-04","months":2,"pax":45171},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2018-12","end":"2019-03","months":4,"pax":75643},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2019-07","end":"2019-07","months":1,"pax":21964},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2019-10","end":"2019-10","months":1,"pax":15851},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2019-12","end":"2020-03","months":4,"pax":67840},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2022-12","end":"2022-12","months":1,"pax":11082},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2023-02","end":"2023-03","months":2,"pax":26109},{"dest_icao":"EGKK","dest_name":"LONDRES-GATWICK","dest_zone":"FOREIGN","start":"2024-03","end":"2024-03","months":1,"pax":11767},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2014-12","end":"2014-12","months":1,"pax":16304},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2015-03","end":"2015-04","months":2,"pax":37519},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2015-07","end":"2015-08","months":2,"pax":44632},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2015-10","end":"2015-10","months":1,"pax":23398},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2015-12","end":"2015-12","months":1,"pax":18551},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2016-02","end":"2016-10","months":9,"pax":218550},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2017-02","end":"2017-10","months":9,"pax":223229},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2018-01","end":"2018-10","months":10,"pax":230169},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2019-03","end":"2019-11","months":9,"pax":208608},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2020-02","end":"2020-02","months":1,"pax":14879},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2021-09","end":"2021-09","months":1,"pax":17404},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2021-12","end":"2021-12","months":1,"pax":10632},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2022-02","end":"2022-02","months":1,"pax":10531},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2022-08","end":"2022-08","months":1,"pax":18340},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2022-12","end":"2022-12","months":1,"pax":12010},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2023-02","end":"2023-03","months":2,"pax":31562},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2023-06","end":"2023-08","months":3,"pax":54026},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2023-10","end":"2023-10","months":1,"pax":20994},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2024-02","end":"2024-05","months":4,"pax":82219},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2024-11","end":"2024-11","months":1,"pax":18550},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2025-02","end":"2025-02","months":1,"pax":18547},{"dest_icao":"EHAM","dest_name":"AMSTERDAM-SCHIPHOL","dest_zone":"FOREIGN","start":"2025-12","end":"2025-12","months":1,"pax":16082},{"dest_icao":"EIDW","dest_name":"DUBLIN","dest_zone":"FOREIGN","start":"2023-02","end":"2023-02","months":1,"pax":10211},{"dest_icao":"EIDW","dest_name":"DUBLIN","dest_zone":"FOREIGN","start":"2023-08","end":"2023-08","months":1,"pax":10062},{"dest_icao":"GMFF","dest_name":"FEZ","dest_zone":"FOREIGN","start":"2024-11","end":"2024-11","months":1,"pax":10232},{"dest_icao":"GMMN","dest_name":"CASABLANCA-MOHAMMED V","dest_zone":"FOREIGN","start":"2011-07","end":"2011-07","months":1,"pax":11886},{"dest_icao":"GMMN","dest_name":"CASABLANCA-MOHAMMED V","dest_zone":"FOREIGN","start":"2012-04","end":"2012-05","months":2,"pax":21677},{"dest_icao":"GMMN","dest_name":"CASABLANCA-MOHAMMED V","dest_zone":"FOREIGN","start":"2012-07","end":"2012-10","months":4,"pax":48381},{"dest_icao":"GMMN","dest_name":"CASABLANCA-MOHAMMED V","dest_zone":"FOREIGN","start":"2013-05","end":"2013-05","months":1,"pax":10800},{"dest_icao":"GMMN","dest_name":"CASABLANCA-MOHAMMED V","dest_zone":"FOREIGN","start":"2013-07","end":"2013-10","months":4,"pax":47073},{"dest_icao":"GMMN","dest_name":"CASABLANCA-MOHAMMED V","dest_zone":"FOREIGN","start":"2014-03","end":"2014-05","months":3,"pax":33206},{"dest_icao":"GMMN","dest_name":"CASABLANCA-MOHAMMED V","dest_zone":"FOREIGN","start":"2014-07","end":"2014-10","months":4,"pax":46917},{"dest_icao":"GMMN","dest_name":"CASABLANCA-MOHAMMED V","dest_zone":"FOREIGN","start":"2019-08","end":"2019-08","months":1,"pax":10524},{"dest_icao":"GMMN","dest_name":"CASABLANCA-MOHAMMED V","dest_zone":"FOREIGN","start":"2021-08","end":"2021-08","months":1,"pax":11805},{"dest_icao":"GMMN","dest_name":"CASABLANCA-MOHAMMED V","dest_zone":"FOREIGN","start":"2022-07","end":"2022-07","months":1,"pax":10055},{"dest_icao":"GMMX","dest_name":"MARRAKECH","dest_zone":"FOREIGN","start":"2006-04","end":"2006-05","months":2,"pax":22863},{"dest_icao":"GMMX","dest_name":"MARRAKECH","dest_zone":"FOREIGN","start":"2006-10","end":"2006-10","months":1,"pax":10114},{"dest_icao":"GMMX","dest_name":"MARRAKECH","dest_zone":"FOREIGN","start":"2007-04","end":"2007-04","months":1,"pax":11126},{"dest_icao":"GMMX","dest_name":"MARRAKECH","dest_zone":"FOREIGN","start":"2014-04","end":"2014-05","months":2,"pax":20338},{"dest_icao":"GMMX","dest_name":"MARRAKECH","dest_zone":"FOREIGN","start":"2014-08","end":"2014-08","months":1,"pax":10088},{"dest_icao":"GMMX","dest_name":"MARRAKECH","dest_zone":"FOREIGN","start":"2022-04","end":"2022-06","months":3,"pax":35901},{"dest_icao":"GMMX","dest_name":"MARRAKECH","dest_zone":"FOREIGN","start":"2022-09","end":"2022-10","months":2,"pax":25213},{"dest_icao":"GMMX","dest_name":"MARRAKECH","dest_zone":"FOREIGN","start":"2023-02","end":"2023-05","months":4,"pax":46706},{"dest_icao":"GMMX","dest_name":"MARRAKECH","dest_zone":"FOREIGN","start":"2024-05","end":"2024-05","months":1,"pax":19187},{"dest_icao":"GMMX","dest_name":"MARRAKECH","dest_zone":"FOREIGN","start":"2025-10","end":"2025-12","months":3,"pax":45399},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2002-10","end":"2002-10","months":1,"pax":8409},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2003-04","end":"2003-04","months":1,"pax":8112},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2003-06","end":"2003-06","months":1,"pax":8188},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2003-10","end":"2003-11","months":2,"pax":17138},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2004-02","end":"2004-03","months":2,"pax":16854},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2004-06","end":"2004-06","months":1,"pax":8695},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2004-09","end":"2004-11","months":3,"pax":25323},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2005-01","end":"2005-07","months":7,"pax":64864},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2005-09","end":"2005-11","months":3,"pax":27914},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2006-01","end":"2006-07","months":7,"pax":68889},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2006-09","end":"2006-11","months":3,"pax":29428},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2007-01","end":"2010-12","months":48,"pax":730659},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2011-03","end":"2011-03","months":1,"pax":18919},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2011-06","end":"2011-06","months":1,"pax":16499},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2011-09","end":"2011-10","months":2,"pax":33968},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2012-02","end":"2012-03","months":2,"pax":34666},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2012-06","end":"2012-06","months":1,"pax":18576},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2013-02","end":"2013-10","months":9,"pax":141186},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2013-12","end":"2014-01","months":2,"pax":28613},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2014-03","end":"2014-03","months":1,"pax":17678},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2016-11","end":"2016-11","months":1,"pax":30493},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2017-02","end":"2017-07","months":6,"pax":187458},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2017-09","end":"2019-03","months":19,"pax":600834},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2019-05","end":"2019-06","months":2,"pax":45933},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2019-08","end":"2019-08","months":1,"pax":18337},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2019-10","end":"2019-10","months":1,"pax":25024},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2019-12","end":"2020-03","months":4,"pax":75045},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2021-09","end":"2021-10","months":2,"pax":21296},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2021-12","end":"2021-12","months":1,"pax":11440},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2022-02","end":"2022-09","months":8,"pax":131099},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2023-06","end":"2023-06","months":1,"pax":15337},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2023-08","end":"2024-01","months":6,"pax":109425},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2024-04","end":"2024-07","months":4,"pax":91661},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2024-09","end":"2025-06","months":10,"pax":187790},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2025-09","end":"2025-10","months":2,"pax":36688},{"dest_icao":"LEMD","dest_name":"MADRID-ADOLFO SUAREZ","dest_zone":"FOREIGN","start":"2025-12","end":"2025-12","months":1,"pax":18272},{"dest_icao":"LEPA","dest_name":"PALMA DE MAJORQUE","dest_zone":"FOREIGN","start":"2015-08","end":"2015-08","months":1,"pax":11312},{"dest_icao":"LEPA","dest_name":"PALMA DE MAJORQUE","dest_zone":"FOREIGN","start":"2016-07","end":"2016-08","months":2,"pax":25280},{"dest_icao":"LEPA","dest_name":"PALMA DE MAJORQUE","dest_zone":"FOREIGN","start":"2017-07","end":"2017-08","months":2,"pax":25137},{"dest_icao":"LEPA","dest_name":"PALMA DE MAJORQUE","dest_zone":"FOREIGN","start":"2018-07","end":"2018-08","months":2,"pax":26346},{"dest_icao":"LEPA","dest_name":"PALMA DE MAJORQUE","dest_zone":"FOREIGN","start":"2019-06","end":"2019-09","months":4,"pax":49345},{"dest_icao":"LEPA","dest_name":"PALMA DE MAJORQUE","dest_zone":"FOREIGN","start":"2020-08","end":"2020-08","months":1,"pax":10182},{"dest_icao":"LEPA","dest_name":"PALMA DE MAJORQUE","dest_zone":"FOREIGN","start":"2021-07","end":"2021-09","months":3,"pax":34027},{"dest_icao":"LEPA","dest_name":"PALMA DE MAJORQUE","dest_zone":"FOREIGN","start":"2022-04","end":"2022-10","months":7,"pax":103953},{"dest_icao":"LEPA","dest_name":"PALMA DE MAJORQUE","dest_zone":"FOREIGN","start":"2023-04","end":"2023-10","months":7,"pax":113410},{"dest_icao":"LEPA","dest_name":"PALMA DE MAJORQUE","dest_zone":"FOREIGN","start":"2024-04","end":"2024-10","months":7,"pax":111955},{"dest_icao":"LEPA","dest_name":"PALMA DE MAJORQUE","dest_zone":"FOREIGN","start":"2025-04","end":"2025-10","months":7,"pax":114603},{"dest_icao":"LEZL","dest_name":"SEVILLE","dest_zone":"FOREIGN","start":"2019-11","end":"2019-12","months":2,"pax":19734},{"dest_icao":"LEZL","dest_name":"SEVILLE","dest_zone":"FOREIGN","start":"2020-02","end":"2020-02","months":1,"pax":10737},{"dest_icao":"LFKF","dest_name":"FIGARI-SUD-CORSE","dest_zone":"METRO","start":"2022-08","end":"2022-08","months":1,"pax":10819},{"dest_icao":"LFLL","dest_name":"LYON-ST-EXUPERY","dest_zone":"METRO","start":"1995-08","end":"1995-08","months":1,"pax":9672},{"dest_icao":"LFLL","dest_name":"LYON-ST-EXUPERY","dest_zone":"METRO","start":"1996-01","end":"2001-03","months":63,"pax":1202656},{"dest_icao":"LFLL","dest_name":"LYON-ST-EXUPERY","dest_zone":"METRO","start":"2008-05","end":"2020-03","months":143,"pax":4529782},{"dest_icao":"LFLL","dest_name":"LYON-ST-EXUPERY","dest_zone":"METRO","start":"2020-07","end":"2020-10","months":4,"pax":55779},{"dest_icao":"LFLL","dest_name":"LYON-ST-EXUPERY","dest_zone":"METRO","start":"2020-12","end":"2024-07","months":44,"pax":871983},{"dest_icao":"LFLL","dest_name":"LYON-ST-EXUPERY","dest_zone":"METRO","start":"2024-09","end":"2025-07","months":11,"pax":212762},{"dest_icao":"LFLL","dest_name":"LYON-ST-EXUPERY","dest_zone":"METRO","start":"2025-09","end":"2025-12","months":4,"pax":82249},{"dest_icao":"LFML","dest_name":"MARSEILLE-PROVENCE","dest_zone":"METRO","start":"2019-10","end":"2019-11","months":2,"pax":24377},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"1997-04","end":"1997-04","months":1,"pax":9947},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"1998-04","end":"1998-04","months":1,"pax":10805},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"1998-06","end":"1998-09","months":4,"pax":47035},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"1998-11","end":"1998-12","months":2,"pax":20121},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"1999-03","end":"1999-05","months":3,"pax":31033},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"1999-07","end":"2000-01","months":7,"pax":79038},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2000-03","end":"2000-03","months":1,"pax":11387},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2000-06","end":"2000-06","months":1,"pax":13011},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2001-04","end":"2001-05","months":2,"pax":22722},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2001-07","end":"2001-08","months":2,"pax":21955},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2002-04","end":"2002-04","months":1,"pax":11145},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2002-06","end":"2002-06","months":1,"pax":10358},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2002-08","end":"2002-10","months":3,"pax":32849},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2002-12","end":"2002-12","months":1,"pax":10851},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2003-06","end":"2003-07","months":2,"pax":20759},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2012-04","end":"2012-09","months":6,"pax":82133},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2012-11","end":"2013-04","months":6,"pax":70782},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2013-06","end":"2013-12","months":7,"pax":86088},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2014-03","end":"2014-12","months":10,"pax":120631},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2015-02","end":"2015-02","months":1,"pax":10723},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2015-04","end":"2016-02","months":11,"pax":139910},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2016-04","end":"2017-01","months":10,"pax":131852},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2017-04","end":"2017-08","months":5,"pax":68859},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2018-09","end":"2018-10","months":2,"pax":26187},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2019-01","end":"2019-02","months":2,"pax":24281},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2019-05","end":"2019-06","months":2,"pax":30882},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2019-09","end":"2020-01","months":5,"pax":79646},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2020-08","end":"2020-08","months":1,"pax":13700},{"dest_icao":"LFMN","dest_name":"NICE-COTE D'AZUR","dest_zone":"METRO","start":"2021-12","end":"2021-12","months":1,"pax":14771},{"dest_icao":"LFPG","dest_name":"PARIS-CHARLES DE GAULLE","dest_zone":"METRO","start":"1990-04","end":"1992-07","months":28,"pax":853549},{"dest_icao":"LFPG","dest_name":"PARIS-CHARLES DE GAULLE","dest_zone":"METRO","start":"1992-09","end":"2003-07","months":131,"pax":5462093},{"dest_icao":"LFPG","dest_name":"PARIS-CHARLES DE GAULLE","dest_zone":"METRO","start":"2003-09","end":"2005-06","months":22,"pax":1192880},{"dest_icao":"LFPG","dest_name":"PARIS-CHARLES DE GAULLE","dest_zone":"METRO","start":"2005-09","end":"2006-07","months":11,"pax":624261},{"dest_icao":"LFPG","dest_name":"PARIS-CHARLES DE GAULLE","dest_zone":"METRO","start":"2006-09","end":"2007-01","months":5,"pax":283278},{"dest_icao":"LFPG","dest_name":"PARIS-CHARLES DE GAULLE","dest_zone":"METRO","start":"2010-03","end":"2020-03","months":121,"pax":8731298},{"dest_icao":"LFPG","dest_name":"PARIS-CHARLES DE GAULLE","dest_zone":"METRO","start":"2020-06","end":"2020-06","months":1,"pax":41442},{"dest_icao":"LFPG","dest_name":"PARIS-CHARLES DE GAULLE","dest_zone":"METRO","start":"2020-09","end":"2022-06","months":22,"pax":982931},{"dest_icao":"LFPG","dest_name":"PARIS-CHARLES DE GAULLE","dest_zone":"METRO","start":"2022-09","end":"2022-10","months":2,"pax":132328},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"1995-01","end":"1998-03","months":39,"pax":7045033},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"1998-05","end":"1998-08","months":4,"pax":652538},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"1998-10","end":"1998-12","months":3,"pax":628171},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"1999-02","end":"1999-05","months":4,"pax":819014},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"1999-09","end":"1999-09","months":1,"pax":206902},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"1999-11","end":"2000-05","months":7,"pax":1492803},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2000-09","end":"2000-10","months":2,"pax":436803},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2000-12","end":"2000-12","months":1,"pax":218528},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2001-02","end":"2001-05","months":4,"pax":827781},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2001-09","end":"2002-01","months":5,"pax":915771},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2002-05","end":"2002-05","months":1,"pax":200083},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2002-08","end":"2003-01","months":6,"pax":1164728},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2003-07","end":"2003-11","months":5,"pax":936545},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2004-01","end":"2004-01","months":1,"pax":183421},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2004-05","end":"2004-05","months":1,"pax":193373},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2004-07","end":"2004-07","months":1,"pax":175217},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2004-09","end":"2004-09","months":1,"pax":193059},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2005-02","end":"2005-02","months":1,"pax":175889},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2005-07","end":"2005-10","months":4,"pax":715024},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2006-01","end":"2006-02","months":2,"pax":376078},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2006-08","end":"2006-08","months":1,"pax":120906},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2007-10","end":"2007-10","months":1,"pax":201856},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2008-10","end":"2009-03","months":6,"pax":1189088},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2009-05","end":"2009-07","months":3,"pax":596222},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2009-09","end":"2009-09","months":1,"pax":198589},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2009-12","end":"2010-06","months":7,"pax":1343661},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2010-10","end":"2010-11","months":2,"pax":399368},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2011-01","end":"2011-04","months":4,"pax":778581},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2011-08","end":"2011-08","months":1,"pax":114796},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2011-11","end":"2011-11","months":1,"pax":208213},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2012-01","end":"2012-02","months":2,"pax":364425},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2012-04","end":"2012-06","months":3,"pax":626607},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2012-08","end":"2013-03","months":8,"pax":1531623},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2013-05","end":"2013-05","months":1,"pax":205162},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2013-09","end":"2013-09","months":1,"pax":201989},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2013-11","end":"2014-01","months":3,"pax":620122},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2014-04","end":"2014-05","months":2,"pax":409862},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2014-09","end":"2014-09","months":1,"pax":149610},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2014-11","end":"2015-01","months":3,"pax":622121},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2015-03","end":"2015-05","months":3,"pax":615369},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2015-11","end":"2015-11","months":1,"pax":199831},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2016-01","end":"2016-02","months":2,"pax":369129},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2016-06","end":"2016-06","months":1,"pax":222674},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2016-08","end":"2016-09","months":2,"pax":313770},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2016-12","end":"2017-04","months":5,"pax":1011218},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2017-08","end":"2017-08","months":1,"pax":100882},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2017-10","end":"2018-06","months":9,"pax":1818981},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2018-09","end":"2019-06","months":10,"pax":2031479},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2019-09","end":"2019-10","months":2,"pax":389324},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2020-01","end":"2020-01","months":1,"pax":188672},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2020-03","end":"2020-03","months":1,"pax":81391},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2020-08","end":"2020-08","months":1,"pax":12942},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2021-02","end":"2021-02","months":1,"pax":49768},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2021-05","end":"2021-06","months":2,"pax":150087},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2021-12","end":"2022-01","months":2,"pax":231422},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2022-05","end":"2022-06","months":2,"pax":342153},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2022-08","end":"2022-08","months":1,"pax":69790},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2022-11","end":"2023-04","months":6,"pax":850474},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2023-06","end":"2023-06","months":1,"pax":140216},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2023-11","end":"2024-02","months":4,"pax":455774},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2024-04","end":"2024-04","months":1,"pax":121049},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2024-06","end":"2024-06","months":1,"pax":120749},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2024-10","end":"2025-01","months":4,"pax":450534},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2025-05","end":"2025-07","months":3,"pax":293342},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2025-09","end":"2025-09","months":1,"pax":104536},{"dest_icao":"LFPO","dest_name":"PARIS-ORLY","dest_zone":"METRO","start":"2025-11","end":"2025-12","months":2,"pax":223399},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2011-10","end":"2011-11","months":2,"pax":24434},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2012-02","end":"2012-10","months":9,"pax":137763},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2012-12","end":"2012-12","months":1,"pax":14899},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2013-02","end":"2013-03","months":2,"pax":25933},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2013-05","end":"2013-06","months":2,"pax":29169},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2013-11","end":"2013-11","months":1,"pax":13429},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2014-03","end":"2014-06","months":4,"pax":63714},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2014-12","end":"2014-12","months":1,"pax":15564},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2015-04","end":"2015-06","months":3,"pax":54383},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2015-11","end":"2015-12","months":2,"pax":32077},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2016-02","end":"2016-03","months":2,"pax":34063},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2016-05","end":"2016-06","months":2,"pax":37775},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2016-09","end":"2016-10","months":2,"pax":38578},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2016-12","end":"2016-12","months":1,"pax":16293},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2017-03","end":"2017-04","months":2,"pax":35140},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2017-10","end":"2017-10","months":1,"pax":19183},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2017-12","end":"2017-12","months":1,"pax":18534},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2018-03","end":"2019-04","months":14,"pax":249030},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2019-06","end":"2019-06","months":1,"pax":18621},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2019-08","end":"2020-03","months":8,"pax":171593},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2020-10","end":"2020-10","months":1,"pax":11722},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2021-06","end":"2021-08","months":3,"pax":41567},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2021-10","end":"2021-12","months":3,"pax":53522},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2022-02","end":"2022-03","months":2,"pax":33854},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2022-09","end":"2022-10","months":2,"pax":35864},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2023-02","end":"2023-03","months":2,"pax":34681},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2023-05","end":"2023-05","months":1,"pax":21114},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2023-08","end":"2023-09","months":2,"pax":31006},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2023-11","end":"2023-11","months":1,"pax":20103},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2024-01","end":"2024-02","months":2,"pax":29996},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2024-05","end":"2024-06","months":2,"pax":29453},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2024-08","end":"2024-10","months":3,"pax":42583},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2024-12","end":"2025-01","months":2,"pax":32333},{"dest_icao":"LFQQ","dest_name":"LILLE-LESQUIN","dest_zone":"METRO","start":"2025-03","end":"2025-03","months":1,"pax":20166},{"dest_icao":"LFRS","dest_name":"NANTES-ATLANTIQUE","dest_zone":"METRO","start":"2001-06","end":"2001-06","months":1,"pax":9786},{"dest_icao":"LFRS","dest_name":"NANTES-ATLANTIQUE","dest_zone":"METRO","start":"2011-03","end":"2015-12","months":58,"pax":891621},{"dest_icao":"LFRS","dest_name":"NANTES-ATLANTIQUE","dest_zone":"METRO","start":"2016-02","end":"2020-03","months":50,"pax":1127331},{"dest_icao":"LFRS","dest_name":"NANTES-ATLANTIQUE","dest_zone":"METRO","start":"2020-09","end":"2020-10","months":2,"pax":23227},{"dest_icao":"LFRS","dest_name":"NANTES-ATLANTIQUE","dest_zone":"METRO","start":"2021-05","end":"2021-07","months":3,"pax":38582},{"dest_icao":"LFRS","dest_name":"NANTES-ATLANTIQUE","dest_zone":"METRO","start":"2021-09","end":"2022-06","months":10,"pax":178621},{"dest_icao":"LFRS","dest_name":"NANTES-ATLANTIQUE","dest_zone":"METRO","start":"2022-09","end":"2022-12","months":4,"pax":76041},{"dest_icao":"LFRS","dest_name":"NANTES-ATLANTIQUE","dest_zone":"METRO","start":"2023-02","end":"2023-04","months":3,"pax":44417},{"dest_icao":"LFRS","dest_name":"NANTES-ATLANTIQUE","dest_zone":"METRO","start":"2023-10","end":"2024-05","months":8,"pax":162794},{"dest_icao":"LFRS","dest_name":"NANTES-ATLANTIQUE","dest_zone":"METRO","start":"2024-09","end":"2024-12","months":4,"pax":74782},{"dest_icao":"LFRS","dest_name":"NANTES-ATLANTIQUE","dest_zone":"METRO","start":"2025-03","end":"2025-06","months":4,"pax":69549},{"dest_icao":"LFRS","dest_name":"NANTES-ATLANTIQUE","dest_zone":"METRO","start":"2025-09","end":"2025-09","months":1,"pax":15203},{"dest_icao":"LFRS","dest_name":"NANTES-ATLANTIQUE","dest_zone":"METRO","start":"2025-11","end":"2025-12","months":2,"pax":35256},{"dest_icao":"LFST","dest_name":"STRASBOURG-ENTZHEIM","dest_zone":"METRO","start":"2015-12","end":"2015-12","months":1,"pax":11472},{"dest_icao":"LFST","dest_name":"STRASBOURG-ENTZHEIM","dest_zone":"METRO","start":"2016-04","end":"2016-04","months":1,"pax":10915},{"dest_icao":"LFST","dest_name":"STRASBOURG-ENTZHEIM","dest_zone":"METRO","start":"2016-06","end":"2016-07","months":2,"pax":21387},{"dest_icao":"LFST","dest_name":"STRASBOURG-ENTZHEIM","dest_zone":"METRO","start":"2017-04","end":"2017-12","months":9,"pax":115678},{"dest_icao":"LFST","dest_name":"STRASBOURG-ENTZHEIM","dest_zone":"METRO","start":"2018-03","end":"2018-04","months":2,"pax":23376},{"dest_icao":"LFST","dest_name":"STRASBOURG-ENTZHEIM","dest_zone":"METRO","start":"2018-10","end":"2018-12","months":3,"pax":45048},{"dest_icao":"LFST","dest_name":"STRASBOURG-ENTZHEIM","dest_zone":"METRO","start":"2019-06","end":"2019-06","months":1,"pax":12549},{"dest_icao":"LFST","dest_name":"STRASBOURG-ENTZHEIM","dest_zone":"METRO","start":"2019-09","end":"2019-09","months":1,"pax":10577},{"dest_icao":"LFST","dest_name":"STRASBOURG-ENTZHEIM","dest_zone":"METRO","start":"2019-12","end":"2019-12","months":1,"pax":19224},{"dest_icao":"LGAV","dest_name":"ATHENES","dest_zone":"FOREIGN","start":"2017-08","end":"2017-08","months":1,"pax":10708},{"dest_icao":"LGAV","dest_name":"ATHENES","dest_zone":"FOREIGN","start":"2018-08","end":"2018-08","months":1,"pax":10481},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2011-04","end":"2011-08","months":5,"pax":56178},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2011-10","end":"2011-10","months":1,"pax":10448},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2012-04","end":"2012-12","months":9,"pax":119814},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2013-02","end":"2013-11","months":10,"pax":143098},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2014-03","end":"2014-10","months":8,"pax":100186},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2015-03","end":"2015-03","months":1,"pax":12140},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2015-05","end":"2015-05","months":1,"pax":10376},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2015-07","end":"2015-07","months":1,"pax":10511},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2015-09","end":"2015-09","months":1,"pax":13436},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2016-08","end":"2016-08","months":1,"pax":14814},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2017-03","end":"2017-03","months":1,"pax":13494},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2017-05","end":"2017-06","months":2,"pax":26917},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2017-08","end":"2017-08","months":1,"pax":15609},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2018-03","end":"2018-12","months":10,"pax":127750},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2019-03","end":"2019-04","months":2,"pax":26901},{"dest_icao":"LIRF","dest_name":"ROME-FIUMICINO","dest_zone":"FOREIGN","start":"2019-06","end":"2019-07","months":2,"pax":29362},{"dest_icao":"LPPR","dest_name":"PORTO","dest_zone":"FOREIGN","start":"2018-05","end":"2018-05","months":1,"pax":10448},{"dest_icao":"LPPR","dest_name":"PORTO","dest_zone":"FOREIGN","start":"2019-09","end":"2019-09","months":1,"pax":12725},{"dest_icao":"LPPR","dest_name":"PORTO","dest_zone":"FOREIGN","start":"2021-08","end":"2021-08","months":1,"pax":11945},{"dest_icao":"LPPR","dest_name":"PORTO","dest_zone":"FOREIGN","start":"2021-10","end":"2021-10","months":1,"pax":9915},{"dest_icao":"LPPR","dest_name":"PORTO","dest_zone":"FOREIGN","start":"2023-03","end":"2023-03","months":1,"pax":12062},{"dest_icao":"LPPR","dest_name":"PORTO","dest_zone":"FOREIGN","start":"2023-08","end":"2023-08","months":1,"pax":12637},{"dest_icao":"LPPR","dest_name":"PORTO","dest_zone":"FOREIGN","start":"2023-12","end":"2023-12","months":1,"pax":13051},{"dest_icao":"LPPR","dest_name":"PORTO","dest_zone":"FOREIGN","start":"2024-09","end":"2024-10","months":2,"pax":22755},{"dest_icao":"LPPR","dest_name":"PORTO","dest_zone":"FOREIGN","start":"2024-12","end":"2024-12","months":1,"pax":10584},{"dest_icao":"LPPR","dest_name":"PORTO","dest_zone":"FOREIGN","start":"2025-03","end":"2025-03","months":1,"pax":10611},{"dest_icao":"LPPT","dest_name":"LISBONNE-UMBERTO DELGADO","dest_zone":"FOREIGN","start":"2017-04","end":"2017-10","months":7,"pax":152213},{"dest_icao":"LPPT","dest_name":"LISBONNE-UMBERTO DELGADO","dest_zone":"FOREIGN","start":"2018-02","end":"2018-02","months":1,"pax":16325},{"dest_icao":"LPPT","dest_name":"LISBONNE-UMBERTO DELGADO","dest_zone":"FOREIGN","start":"2018-04","end":"2018-12","months":9,"pax":200334},{"dest_icao":"LPPT","dest_name":"LISBONNE-UMBERTO DELGADO","dest_zone":"FOREIGN","start":"2019-02","end":"2019-02","months":1,"pax":15877},{"dest_icao":"LPPT","dest_name":"LISBONNE-UMBERTO DELGADO","dest_zone":"FOREIGN","start":"2019-04","end":"2019-06","months":3,"pax":64780},{"dest_icao":"LPPT","dest_name":"LISBONNE-UMBERTO DELGADO","dest_zone":"FOREIGN","start":"2019-09","end":"2019-10","months":2,"pax":41344},{"dest_icao":"LPPT","dest_name":"LISBONNE-UMBERTO DELGADO","dest_zone":"FOREIGN","start":"2021-07","end":"2021-12","months":6,"pax":75464},{"dest_icao":"LPPT","dest_name":"LISBONNE-UMBERTO DELGADO","dest_zone":"FOREIGN","start":"2022-02","end":"2022-06","months":5,"pax":77058},{"dest_icao":"LPPT","dest_name":"LISBONNE-UMBERTO DELGADO","dest_zone":"FOREIGN","start":"2022-11","end":"2024-04","months":18,"pax":363744},{"dest_icao":"LPPT","dest_name":"LISBONNE-UMBERTO DELGADO","dest_zone":"FOREIGN","start":"2024-06","end":"2024-06","months":1,"pax":14646},{"dest_icao":"LPPT","dest_name":"LISBONNE-UMBERTO DELGADO","dest_zone":"FOREIGN","start":"2024-10","end":"2024-11","months":2,"pax":31732},{"dest_icao":"LPPT","dest_name":"LISBONNE-UMBERTO DELGADO","dest_zone":"FOREIGN","start":"2025-02","end":"2025-03","months":2,"pax":30920},{"dest_icao":"LPPT","dest_name":"LISBONNE-UMBERTO DELGADO","dest_zone":"FOREIGN","start":"2025-07","end":"2025-08","months":2,"pax":32243},{"dest_icao":"LSGG","dest_name":"GENEVE","dest_zone":"FOREIGN","start":"2018-04","end":"2018-05","months":2,"pax":22759},{"dest_icao":"LSGG","dest_name":"GENEVE","dest_zone":"FOREIGN","start":"2018-07","end":"2018-10","months":4,"pax":47853},{"dest_icao":"LSGG","dest_name":"GENEVE","dest_zone":"FOREIGN","start":"2019-04","end":"2019-10","months":7,"pax":81696},{"dest_icao":"LSGG","dest_name":"GENEVE","dest_zone":"FOREIGN","start":"2023-12","end":"2023-12","months":1,"pax":11770},{"dest_icao":"LSGG","dest_name":"GENEVE","dest_zone":"FOREIGN","start":"2024-02","end":"2024-04","months":3,"pax":34560},{"dest_icao":"LSGG","dest_name":"GENEVE","dest_zone":"FOREIGN","start":"2024-12","end":"2024-12","months":1,"pax":11857},{"dest_icao":"LSGG","dest_name":"GENEVE","dest_zone":"FOREIGN","start":"2025-02","end":"2025-03","months":2,"pax":22204},{"dest_icao":"LSGG","dest_name":"GENEVE","dest_zone":"FOREIGN","start":"2025-12","end":"2025-12","months":1,"pax":13212}],"orly":{"common_months":4,"pax_2019":783147,"pax_2025":429550,"change_pct":-45.2},"quality":[{"n":1,"check_name":"APT rows: staging = fact","result":"38821 / 38821","status":"PASS"},{"n":2,"check_name":"PAP rows: staging = fact","result":"45787 / 45787","status":"PASS"},{"n":3,"check_name":"Toulouse: months with data / months expected","result":"432 / 432","status":"PASS"},{"n":4,"check_name":"PEQ = pax + 10 x freight (within 2, rounding)","result":"99.55 % of rows","status":"PASS"},{"n":5,"check_name":"Negative freight values in source (floored at 0)","result":"19 rows","status":"PASS"},{"n":6,"check_name":"Routes with more than one published distance","result":"0","status":"PASS"},{"n":7,"check_name":"Toulouse 2025 passengers (airport reports 7.6 M)","result":"7 630 981","status":"PASS"}],"forecast_metrics":{"seasonal_naive":{"mape_24m_from_2023-12":4.14,"mape_12m_from_2024-12":3.61,"mean_mape_pct":3.88},"sarima":{"mape_24m_from_2023-12":3.86,"mape_12m_from_2024-12":2.93,"mean_mape_pct":3.4},"ensemble":{"mape_24m_from_2023-12":3.42,"mape_12m_from_2024-12":3.26,"mean_mape_pct":3.34},"_selected_model":"ensemble","_reality_check_2026":[{"quarter":"2026Q1","actual_airport":1689291,"forecast":1727774,"error_pct":2.28,"source":"https://www.air-journal.fr/?p=275367"},{"quarter":"2026Q2","actual_airport":2132814,"forecast":2079207,"error_pct":-2.51,"source":"https://www.toulouse.aeroport.fr/sites/default/files/2026-08/CP_Trafic_T2_2026.pdf"},{"quarter":"2026Q3","actual_airport":2015286,"forecast":1965033,"error_pct":-2.49,"source":"https://www.air-journal.fr/?p=278869"}]},"benchmark":{"environment":{"postgres":"16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)","cpu_count":2,"machine":"x86_64","rows":17654080},"stages":{"baseline":{"A_daily_month":{"median_ms":400.329,"runs_ms":[400.329,482.816,422.649,400.196,399.889],"scan_nodes":["Seq Scan"],"buffers_hit":786,"buffers_read":111775},"B_year_ranking":{"median_ms":552.65,"runs_ms":[627.469,514.982,552.65,598.714,551.484],"scan_nodes":["Seq Scan"],"buffers_hit":1262,"buffers_read":111199},"C_monthly_trend":{"median_ms":528.172,"runs_ms":[540.586,491.98,528.172,490.347,566.931],"scan_nodes":["Seq Scan"],"buffers_hit":1840,"buffers_read":110623}},"btree":{"A_daily_month":{"median_ms":1.146,"runs_ms":[1.146,1.171,1.133,1.172,1.06],"scan_nodes":["Index Only Scan"],"buffers_hit":23,"buffers_read":0},"B_year_ranking":{"median_ms":561.135,"runs_ms":[529.104,518.089,591.628,561.135,569.73],"scan_nodes":["Seq Scan"],"buffers_hit":2510,"buffers_read":109951},"C_monthly_trend":{"median_ms":131.185,"runs_ms":[131.185,129.947,133.089,146.935,129.74],"scan_nodes":["Index Only Scan"],"buffers_hit":2810,"buffers_read":0}},"brin":{"A_daily_month":{"median_ms":0.8,"runs_ms":[0.746,0.792,0.811,0.8,0.958],"scan_nodes":["Index Only Scan"],"buffers_hit":23,"buffers_read":0},"B_year_ranking":{"median_ms":186.054,"runs_ms":[190.413,203.722,186.054,181.54,184.309],"scan_nodes":["Bitmap Heap Scan","Bitmap Index Scan"],"buffers_hit":10782,"buffers_read":0},"C_monthly_trend":{"median_ms":134.577,"runs_ms":[169.877,132.224,134.577,129.96,138.993],"scan_nodes":["Index Only Scan"],"buffers_hit":2810,"buffers_read":0}},"partitioned":{"A_daily_month":{"median_ms":0.855,"runs_ms":[0.862,0.869,0.799,0.827,0.855],"scan_nodes":["Index Only Scan"],"buffers_hit":23,"buffers_read":0},"B_year_ranking":{"median_ms":194.795,"runs_ms":[186.361,194.071,194.795,230.337,205.914],"scan_nodes":["Seq Scan"],"buffers_hit":6746,"buffers_read":4000},"C_monthly_trend":{"median_ms":183.358,"runs_ms":[184.525,217.867,159.207,183.358,168.458],"scan_nodes":["Index Only Scan"],"buffers_hit":2849,"buffers_read":0}},"matview":{"B_year_ranking_mv":{"median_ms":0.67,"runs_ms":[0.669,0.698,0.646,0.67,0.78],"scan_nodes":["Seq Scan"],"buffers_hit":128,"buffers_read":0},"C_monthly_trend_mv":{"median_ms":0.056,"runs_ms":[0.063,0.052,0.049,0.071,0.056],"scan_nodes":["Bitmap Heap Scan","Bitmap Index Scan"],"buffers_hit":3,"buffers_read":0}}},"sizes":{"table":["878 MB",921165824],"btree_index":["531 MB",556867584],"brin_index":["104 kB",106496],"matview":["1024 kB",1048576]}}}</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+(() => {
+"use strict";
+const D = JSON.parse(document.getElementById("data").textContent);
+
+/* ---------- helpers ---------- */
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmtInt = d3.format(",");
+const fmtM = v => (v / 1e6).toFixed(2) + "M";
+const fmtM1 = v => (v / 1e6).toFixed(1) + "M";
+const pct = (v, d = 1) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d) + "%";
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const parseMonth = d3.timeParse("%Y-%m");
+const SHORT = { LFOB: "Beauvais", LFML: "Marseille", LFSB: "Basel-Mulhouse", LFMN: "Nice", LFRS: "Nantes",
+  LFLL: "Lyon", LFMT: "Montpellier", LFBO: "Toulouse", LFQQ: "Lille", LFBD: "Bordeaux", LFPO: "Paris-Orly",
+  LFPG: "Paris-CDG", LFST: "Strasbourg", LEMD: "Madrid", EHAM: "Amsterdam", EGKK: "London-Gatwick",
+  EDHI: "Hamburg-Finkenwerder", LIRF: "Rome-Fiumicino", LPPT: "Lisbon", LEPA: "Palma de Mallorca",
+  LSGG: "Geneva", GMMX: "Marrakesh", EBBR: "Brussels", GMMN: "Casablanca", EGGD: "Bristol",
+  EDDB: "Berlin-Brandenburg", LPPR: "Porto", EDDH: "Hamburg", LEZL: "Seville", LFKF: "Figari" };
+const titleCase = s => s.toLowerCase().replace(/(^|[\s-])\p{L}/gu, m => m.toUpperCase());
+const shortName = (icao, name) => SHORT[icao] || titleCase(name);
+const yearTicks = w => (w < 620 ? [1990, 2000, 2010, 2020] : [1990, 1995, 2000, 2005, 2010, 2015, 2020, 2025]);
+
+const tip = document.getElementById("tip");
+function showTip(html, ev) {
+  tip.innerHTML = html; tip.style.opacity = 1;
+  const r = tip.getBoundingClientRect(), pad = 14;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - pad;
+  if (y + r.height > innerHeight - 8) y = ev.clientY - r.height - pad;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+const hideTip = () => { tip.style.opacity = 0; };
+
+function table(el, cols, rows, hl) {
+  const t = document.createElement("table");
+  t.innerHTML = "<thead><tr>" + cols.map(c => `<th scope="col">${c[0]}</th>`).join("") + "</tr></thead><tbody>" +
+    rows.map(r => `<tr${hl && hl(r) ? ' class="hl"' : ""}>` + cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("") + "</tbody>";
+  document.getElementById(el).replaceChildren(t);
+}
+function svgFor(id, height) {
+  const el = document.getElementById(id);
+  const width = Math.max(300, el.clientWidth);
+  el.replaceChildren();
+  const svg = d3.select(el).append("svg").attr("viewBox", `0 0 ${width} ${height}`).attr("role", "img");
+  return { svg, width, el };
+}
+// bar with 4px rounded data end, square at the baseline
+function vBar(x, y, w, h, r = 4) {
+  r = Math.min(r, h, w / 2);
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+function hBar(x, y, w, h, r = 4) {
+  r = Math.min(r, w, h / 2);
+  return `M${x},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h - r}Q${x + w},${y + h} ${x + w - r},${y + h}H${x}Z`;
+}
+function gridY(g, y, x0, x1, ticks, fmt) {
+  const t = g.append("g").attr("class", "tick");
+  ticks.forEach(v => {
+    t.append("line").attr("x1", x0).attr("x2", x1).attr("y1", y(v)).attr("y2", y(v))
+      .attr("stroke", v === 0 ? css("--axis") : css("--grid")).attr("stroke-width", 1);
+    t.append("text").attr("x", x0 - 8).attr("y", y(v)).attr("dy", "0.32em").attr("text-anchor", "end").text(fmt(v));
+  });
+}
+
+/* ---------- data shaping ---------- */
+const annual = D.annual;
+const byYear = Object.fromEntries(annual.map(r => [r.year, r]));
+const last = annual[annual.length - 1], prev = byYear[last.year - 1], y2019 = byYear[2019];
+const peak = annual.reduce((a, b) => (b.pax > a.pax ? b : a));
+const fcEns = D.forecast.filter(r => r.model === "ensemble");
+const fcYears = d3.rollups(fcEns, v => d3.sum(v, d => d.pax), d => +d.month.slice(0, 4)).map(([year, pax]) => ({ year, pax, forecast: true }));
+const tls = D.recovery.find(r => r.icao === "LFBO");
+const metrics = D.forecast_metrics || {};
+const bench = D.benchmark || null;
+
+/* ---------- KPI tiles ---------- */
+const bestRank = d3.min(annual, d => d.rank);
+const bestRankYears = annual.filter(d => d.rank === bestRank).map(d => d.year);
+const y2000 = byYear[2000];
+document.getElementById("kpis").innerHTML = [
+  { cls: "lead", label: `Passengers in ${last.year}`, value: (last.pax / 1e6).toFixed(2) + "<small>M</small>",
+    delta: `<span class="down">${pct((last.pax / prev.pax - 1) * 100)}</span> vs ${prev.year}` },
+  { label: "Share of 2019 traffic regained", value: Math.round(last.pax / y2019.pax * 100) + "<small>%</small>",
+    delta: `${fmtM(y2019.pax)} passengers in 2019` },
+  { label: "Rank among French airports", value: last.rank + "<small>th</small>",
+    delta: `${bestRank}th in ${bestRankYears.join("–")}, its best` },
+  { label: "Passengers per commercial flight", value: Math.round(last.pax_per_flight),
+    delta: `${Math.round(y2000.pax_per_flight)} in 2000` },
+].map(k => `<div class="kpi ${k.cls || ""}"><p class="label">${k.label}</p><p class="value">${k.value}</p><p class="delta">${k.delta}</p></div>`).join("");
+
+/* ---------- texts ---------- */
+const covidDrop = (byYear[2020].pax / y2019.pax - 1) * 100;
+document.getElementById("growth-text").innerHTML =
+  `From <strong>${fmtM(annual[0].pax)}</strong> passengers in ${annual[0].year} to a peak of <strong>${fmtM(peak.pax)}</strong> in ${peak.year}, Toulouse tripled its traffic. ` +
+  `In 2020 it lost <strong>${Math.abs(covidDrop).toFixed(0)}%</strong> in a year. Traffic bounced back in 2022–2023, then stalled: ${last.year} closed at <strong>${fmtM(last.pax)}</strong>.`;
+const beauvais = D.recovery[0];
+const weaker = D.recovery.filter(r => r.recovery_pct < tls.recovery_pct).map(r => SHORT[r.icao]);
+document.getElementById("recovery-text").innerHTML =
+  `Passengers in 2025 as a share of 2019, for the ten largest airports outside Paris. Toulouse is at <strong>${tls.recovery_pct.toFixed(1)}%</strong>; only ${weaker.join(" and ")} did worse. ` +
+  `${SHORT[beauvais.icao]}, a low-cost base, grew by ${Math.round(beauvais.recovery_pct - 100)}%.`;
+const o = D.orly;
+document.getElementById("recovery-facts").innerHTML = [
+  { big: `${o.change_pct.toFixed(0)}%`, small: `Toulouse–Paris-Orly passengers, 2025 vs 2019, same ${o.common_months} calendar months (DGAC route data)` },
+  { big: "65% vs 101%", small: "Domestic vs international traffic in Q2 2026, as a share of Q2 2019 (airport figures)" },
+  { big: "31 Mar 2025", small: "easyJet closed its Toulouse base, the airport's explanation for the 2025 dip" },
+].map(f => `<div class="fact"><div class="big">${f.big}</div><div class="small">${f.small}</div></div>`).join("");
+
+const sh = (dec, m) => D.seasonality.find(r => r.decade === dec && r.month === m).share_pct;
+document.getElementById("season-text").innerHTML =
+  `In the 1990s, August was Toulouse's quietest month (<strong>${sh(1990, 8).toFixed(1)}%</strong> of the year's passengers); in the 2020s it carries <strong>${sh(2020, 8).toFixed(1)}%</strong>. ` +
+  `January fell from ${sh(1990, 1).toFixed(1)}% to ${sh(2020, 1).toFixed(1)}%. A business airport turned into a leisure one.`;
+
+const minPpf = annual.reduce((a, b) => (b.pax_per_flight < a.pax_per_flight ? b : a));
+document.getElementById("planes-text").innerHTML =
+  `Average passengers per commercial passenger flight. After a low of <strong>${minPpf.pax_per_flight.toFixed(0)}</strong> in ${minPpf.year}, the figure nearly doubled to <strong>${last.pax_per_flight.toFixed(0)}</strong> in ${last.year}: ` +
+  `${fmtInt(last.flights)} flights carried ${fmtM1(last.pax)} passengers, against ${fmtInt(byYear[2000].flights)} flights for ${fmtM1(byYear[2000].pax)} in 2000. That shift matches the rise of low-cost carriers, which flew half of Toulouse's passengers in 2025.`;
+
+document.getElementById("routes-text").innerHTML =
+  `French statistical secrecy rules publish a route's monthly traffic only when at least three airlines fly it and none has more than 85% of it. ` +
+  `So the DGAC route series is full of holes, and annual route totals cannot be compared. The gaps below are the data, not missing values.`;
+
+const fy = y => fcYears.find(r => r.year === y).pax;
+const sel = metrics._selected_model || "ensemble";
+document.getElementById("forecast-text").innerHTML =
+  `Monthly passengers, with the forecast from January 2026. The selected model (${sel === "ensemble" ? "average of a SARIMA airline model and a seasonal-naive benchmark" : sel}) expects <strong>${fmtM(fy(2026))}</strong> in 2026 and <strong>${fmtM(fy(2027))}</strong> in 2027: still about 20% below 2019.`;
+
+/* ---------- 01 annual columns ---------- */
+function drawAnnual() {
+  const rows = [...annual.map(r => ({ ...r, forecast: false })), ...fcYears];
+  const { svg, width } = svgFor("chart-annual", 330);
+  const m = { t: 26, r: 8, b: 30, l: 44 }, H = 330;
+  const x = d3.scaleBand().domain(rows.map(d => d.year)).range([m.l, width - m.r]).padding(0.28);
+  const y = d3.scaleLinear().domain([0, 10.5e6]).range([H - m.b, m.t]);
+  gridY(svg, y, m.l, width - m.r, [0, 2e6, 4e6, 6e6, 8e6, 10e6], v => (v ? v / 1e6 + "M" : "0"));
+  const bw = Math.min(24, x.bandwidth());
+  const accent = css("--accent");
+  const g = svg.append("g");
+  g.selectAll("path").data(rows).join("path")
+    .attr("d", d => vBar(x(d.year) + (x.bandwidth() - bw) / 2, y(d.pax), bw, y(0) - y(d.pax)))
+    .attr("fill", accent).attr("fill-opacity", d => (d.forecast ? 0.35 : 1));
+  // x axis labels: every 5 years + forecast years
+  const xt = svg.append("g").attr("class", "tick");
+  const narrow = width < 620;
+  rows.filter(d => (narrow ? d.year % 10 === 0 : d.year % 5 === 0 || d.year === 2027)).forEach(d => {
+    xt.append("text").attr("x", x(d.year) + x.bandwidth() / 2).attr("y", H - m.b + 18).attr("text-anchor", "middle").text(d.year);
+  });
+  // selective labels
+  const lab = [[annual[0], fmtM(annual[0].pax)], [peak, fmtM(peak.pax) + " peak"], [byYear[2020], fmtM(byYear[2020].pax)],
+               [last, fmtM(last.pax)], [fcYears[fcYears.length - 1], fmtM(fcYears[fcYears.length - 1].pax) + " f."]];
+  const lg = svg.append("g").attr("font-size", 12).attr("fill", css("--ink-2"));
+  lab.forEach(([d, t], i) => {
+    const cx = x(d.year) + x.bandwidth() / 2;
+    if (narrow && (i === 2 || i === 4)) return;   // no room on a phone: the table view carries them
+    if (d.year === 2020) {   // tall 2019 and 2022 columns on both sides: centre it over the 2020-2021 gap
+      lg.append("text").attr("x", x(2021)).attr("y", y(byYear[2021].pax) - 7).attr("text-anchor", "middle").attr("fill", css("--ink-2")).text(t);
+      return;
+    }
+    lg.append("text").attr("x", cx).attr("y", y(d.pax) - 7).attr("text-anchor", i === 0 ? "start" : i >= 3 ? "end" : "middle")
+      .attr("dx", i === 0 ? -bw / 2 : i >= 3 ? bw / 2 : 0).attr("font-weight", d === peak || d === last ? 600 : 400)
+      .attr("fill", d === peak || d === last ? css("--ink") : css("--ink-2")).text(t);
+  });
+  // hover targets: full band height
+  svg.append("g").selectAll("rect").data(rows).join("rect")
+    .attr("x", d => x(d.year) - x.step() * x.paddingInner() / 2).attr("width", x.step()).attr("y", m.t).attr("height", H - m.t - m.b)
+    .attr("fill", "transparent")
+    .on("pointermove", (ev, d) => {
+      const pv = byYear[d.year - 1] || fcYears.find(f => f.year === d.year - 1);
+      showTip(`<b>${d.year}${d.forecast ? " · forecast" : ""}</b><br>${fmtInt(Math.round(d.pax))} passengers` +
+        (pv ? `<br><span class="m">${pct((d.pax / pv.pax - 1) * 100)} vs ${d.year - 1}</span>` : "") +
+        (d.rank ? `<br><span class="m">Rank in France: ${d.rank}</span>` : ""), ev);
+    }).on("pointerleave", hideTip);
+  table("table-annual", [["Year", r => r.year], ["Passengers", r => fmtInt(Math.round(r.pax))], ["Change", r => r.growth == null ? "" : r.growth],
+    ["Rank in France", r => r.rank || "forecast"], ["Pax per flight", r => r.pax_per_flight || ""]],
+    rows.map((r, i) => ({ ...r, growth: i ? pct((r.pax / rows[i - 1].pax - 1) * 100) : null })), r => r.year === peak.year || r.year === last.year);
+}
+
+/* ---------- 02 recovery bars ---------- */
+function drawRecovery() {
+  const rows = D.recovery;
+  const H = rows.length * 30 + 40;
+  const { svg, width } = svgFor("chart-recovery", H);
+  const m = { t: 22, r: 52, b: 14, l: 112 };
+  const x = d3.scaleLinear().domain([0, Math.max(170, d3.max(rows, d => d.recovery_pct))]).range([m.l, width - m.r]);
+  const y = d3.scaleBand().domain(rows.map(d => d.icao)).range([m.t, H - m.b]).padding(0.32);
+  const bh = Math.min(18, y.bandwidth());
+  // reference line at 100%
+  svg.append("line").attr("x1", x(100)).attr("x2", x(100)).attr("y1", m.t - 8).attr("y2", H - m.b)
+    .attr("stroke", css("--axis")).attr("stroke-width", 1);
+  svg.append("text").attr("class", "axis-label").attr("x", x(100) + 5).attr("y", m.t - 10).text("2019 level");
+  rows.forEach(d => {
+    const isT = d.icao === "LFBO", cy = y(d.icao) + (y.bandwidth() - bh) / 2;
+    svg.append("path").attr("d", hBar(x(0), cy, x(d.recovery_pct) - x(0), bh)).attr("fill", isT ? css("--accent") : css("--gray"));
+    svg.append("text").attr("x", m.l - 10).attr("y", cy + bh / 2).attr("dy", "0.34em").attr("text-anchor", "end")
+      .attr("font-size", 13).attr("font-weight", isT ? 600 : 400).attr("fill", isT ? css("--ink") : css("--ink-2")).text(SHORT[d.icao]);
+    svg.append("text").attr("x", x(d.recovery_pct) + 6).attr("y", cy + bh / 2).attr("dy", "0.34em")
+      .attr("font-size", 12.5).attr("font-weight", isT ? 600 : 400).attr("fill", isT ? css("--ink") : css("--ink-2"))
+      .style("font-variant-numeric", "tabular-nums").text(d.recovery_pct.toFixed(0) + "%");
+    svg.append("rect").attr("x", 0).attr("width", width).attr("y", y(d.icao) - y.step() * y.paddingInner() / 2).attr("height", y.step())
+      .attr("fill", "transparent")
+      .on("pointermove", ev => showTip(`<b>${titleCase(d.name)}</b><br>2019: ${fmtInt(d.pax_2019)}<br>2025: ${fmtInt(d.pax_2025)}<br><span class="m">${d.recovery_pct}% of 2019</span>`, ev))
+      .on("pointerleave", hideTip);
+  });
+  table("table-recovery", [["Airport", r => titleCase(r.name)], ["2019", r => fmtInt(r.pax_2019)], ["2025", r => fmtInt(r.pax_2025)], ["2025 / 2019", r => r.recovery_pct + "%"]],
+    rows, r => r.icao === "LFBO");
+}
+
+/* ---------- 03 seasonality heatmap ---------- */
+function drawHeat() {
+  const monthly = D.monthly.map(r => ({ ...r, date: parseMonth(r.month), year: +r.month.slice(0, 4), m: +r.month.slice(5, 7) }));
+  const yearTot = d3.rollup(monthly, v => d3.sum(v, d => d.pax), d => d.year);
+  monthly.forEach(d => { d.idx = d.pax / (yearTot.get(d.year) / 12); });
+  const years = [...yearTot.keys()];
+  const { svg, width } = svgFor("chart-heat", 12 * 22 + 46);
+  const m = { t: 6, r: 4, b: 26, l: 36 }, H = 12 * 22 + 46;
+  const x = d3.scaleBand().domain(years).range([m.l, width - m.r]).paddingInner(0.08);
+  const y = d3.scaleBand().domain(d3.range(1, 13)).range([m.t, H - m.b]).paddingInner(0.08);
+  const color = d3.scaleDiverging().domain([0.6, 1, 1.4]).clamp(true)
+    .interpolator(t => t < 0.5 ? d3.interpolateLab(css("--div-lo"), css("--div-mid"))(t * 2) : d3.interpolateLab(css("--div-mid"), css("--div-hi"))((t - 0.5) * 2));
+  svg.append("g").selectAll("rect").data(monthly).join("rect")
+    .attr("x", d => x(d.year)).attr("y", d => y(d.m)).attr("width", x.bandwidth()).attr("height", y.bandwidth()).attr("rx", 2)
+    .attr("fill", d => color(d.idx))
+    .on("pointermove", (ev, d) => showTip(`<b>${MONTHS[d.m - 1]} ${d.year}</b><br>${fmtInt(d.pax)} passengers<br><span class="m">${pct((d.idx - 1) * 100, 0)} vs the year's average month</span>`, ev))
+    .on("pointerleave", hideTip);
+  const t = svg.append("g").attr("class", "tick");
+  d3.range(1, 13).forEach(mm => t.append("text").attr("x", m.l - 6).attr("y", y(mm) + y.bandwidth() / 2).attr("dy", "0.32em").attr("text-anchor", "end").text(MONTHS[mm - 1]));
+  years.filter(yy => yy % 5 === 0).forEach(yy => t.append("text").attr("x", x(yy) + x.bandwidth() / 2).attr("y", H - 8).attr("text-anchor", "middle").text(yy));
+  // legend: gradient
+  const lw = 150;
+  const leg = d3.select("#season-legend").html("");
+  const ls = leg.append("svg").attr("width", lw + 120).attr("height", 30).attr("aria-hidden", "true");
+  const gid = "grad-season";
+  const grad = ls.append("defs").append("linearGradient").attr("id", gid);
+  d3.range(0, 1.01, 0.1).forEach(s => grad.append("stop").attr("offset", s).attr("stop-color", color(0.6 + 0.8 * s)));
+  ls.append("text").attr("x", 0).attr("y", 15).attr("font-size", 12).attr("fill", css("--muted")).text("−40%");
+  ls.append("rect").attr("x", 38).attr("y", 5).attr("width", lw).attr("height", 12).attr("rx", 3).attr("fill", `url(#${gid})`);
+  ls.append("text").attr("x", 44 + lw).attr("y", 15).attr("font-size", 12).attr("fill", css("--muted")).text("+40%");
+  ls.append("text").attr("x", 38 + lw / 2).attr("y", 29).attr("font-size", 11).attr("text-anchor", "middle").attr("fill", css("--muted")).text("vs average month");
+  table("table-season", [["Month", r => MONTHS[r.month - 1]], ["1990s", r => r.d1990 + "%"], ["2000s", r => r.d2000 + "%"], ["2010s", r => r.d2010 + "%"], ["2020s", r => r.d2020 + "%"]],
+    d3.range(1, 13).map(mm => ({ month: mm, d1990: sh(1990, mm).toFixed(2), d2000: sh(2000, mm).toFixed(2), d2010: sh(2010, mm).toFixed(2), d2020: sh(2020, mm).toFixed(2) })),
+    r => r.month === 8 || r.month === 1);
+}
+
+/* ---------- 04 passengers per flight ---------- */
+function drawPpf() {
+  const H = 260;
+  const { svg, width } = svgFor("chart-ppf", H);
+  const m = { t: 22, r: 44, b: 28, l: 40 };
+  const x = d3.scaleLinear().domain(d3.extent(annual, d => d.year)).range([m.l, width - m.r]);
+  const y = d3.scaleLinear().domain([0, 140]).range([H - m.b, m.t]);
+  gridY(svg, y, m.l, width - m.r, [0, 35, 70, 105, 140], v => v);
+  const accent = css("--accent");
+  svg.append("path").datum(annual).attr("fill", accent).attr("fill-opacity", 0.1)
+    .attr("d", d3.area().x(d => x(d.year)).y0(y(0)).y1(d => y(d.pax_per_flight)).curve(d3.curveMonotoneX));
+  svg.append("path").datum(annual).attr("fill", "none").attr("stroke", accent).attr("stroke-width", 2).attr("stroke-linejoin", "round").attr("stroke-linecap", "round")
+    .attr("d", d3.line().x(d => x(d.year)).y(d => y(d.pax_per_flight)).curve(d3.curveMonotoneX));
+  const t = svg.append("g").attr("class", "tick");
+  yearTicks(width).forEach(yy => t.append("text").attr("x", x(yy)).attr("y", H - 8).attr("text-anchor", "middle").text(yy));
+  const surf = css("--surface");
+  [[minPpf, "start", 8, 18], [last, "end", -2, -12]].forEach(([d, anchor, dx, dy]) => {
+    svg.append("circle").attr("cx", x(d.year)).attr("cy", y(d.pax_per_flight)).attr("r", 4.5).attr("fill", accent).attr("stroke", surf).attr("stroke-width", 2);
+    svg.append("text").attr("x", x(d.year) + dx).attr("y", y(d.pax_per_flight) + dy).attr("text-anchor", anchor)
+      .attr("font-size", 12.5).attr("font-weight", 600).attr("fill", css("--ink")).text(`${d.pax_per_flight.toFixed(0)} in ${d.year}`);
+  });
+  // crosshair
+  const cross = svg.append("g").style("display", "none");
+  cross.append("line").attr("y1", m.t).attr("y2", H - m.b).attr("stroke", css("--axis"));
+  cross.append("circle").attr("r", 4.5).attr("fill", accent).attr("stroke", surf).attr("stroke-width", 2);
+  svg.append("rect").attr("x", m.l).attr("y", m.t).attr("width", width - m.l - m.r).attr("height", H - m.t - m.b).attr("fill", "transparent")
+    .on("pointermove", ev => {
+      const yr = Math.round(x.invert(d3.pointer(ev)[0])), d = byYear[yr]; if (!d) return;
+      cross.style("display", null);
+      cross.select("line").attr("x1", x(yr)).attr("x2", x(yr));
+      cross.select("circle").attr("cx", x(yr)).attr("cy", y(d.pax_per_flight));
+      showTip(`<b>${yr}</b><br>${d.pax_per_flight} passengers per flight<br><span class="m">${fmtInt(d.flights)} flights</span>`, ev);
+    }).on("pointerleave", () => { cross.style("display", "none"); hideTip(); });
+  table("table-ppf", [["Year", r => r.year], ["Passengers", r => fmtInt(r.pax)], ["Passenger flights", r => fmtInt(r.flights)], ["Pax per flight", r => r.pax_per_flight]], annual);
+}
+
+/* ---------- 05 route islands ---------- */
+function drawRoutes() {
+  const isl = D.route_islands.map(r => ({ ...r, s: parseMonth(r.start), e: d3.timeMonth.offset(parseMonth(r.end), 1) }));
+  const byDest = d3.groups(isl, d => d.dest_icao).map(([icao, v]) => ({
+    icao, name: shortName(icao, v[0].dest_name), zone: v[0].dest_zone, islands: v,
+    months: d3.sum(v, d => d.months), first: d3.min(v, d => d.s), pax: d3.sum(v, d => d.pax) }))
+    .filter(d => d.months >= 12)
+    .sort((a, b) => (a.zone === "FOREIGN") - (b.zone === "FOREIGN") || a.first - b.first);
+  const rowH = 22, H = byDest.length * rowH + 40;
+  const { svg, width } = svgFor("chart-routes", H);
+  const m = { t: 8, r: 10, b: 28, l: 150 };
+  const x = d3.scaleTime().domain([new Date(1990, 0, 1), new Date(2026, 0, 1)]).range([m.l, width - m.r]);
+  const y = d3.scaleBand().domain(byDest.map(d => d.icao)).range([m.t, H - m.b]).padding(0.3);
+  const t = svg.append("g").attr("class", "tick");
+  yearTicks(width).forEach(yy => {
+    t.append("line").attr("x1", x(new Date(yy, 0, 1))).attr("x2", x(new Date(yy, 0, 1))).attr("y1", m.t).attr("y2", H - m.b).attr("stroke", css("--grid"));
+    t.append("text").attr("x", x(new Date(yy, 0, 1))).attr("y", H - 8).attr("text-anchor", "middle").text(yy);
+  });
+  const colDom = css("--dom"), colInt = css("--intl");
+  const bh = Math.min(12, y.bandwidth());
+  byDest.forEach(d => {
+    const cy = y(d.icao) + (y.bandwidth() - bh) / 2;
+    svg.append("text").attr("x", m.l - 10).attr("y", cy + bh / 2).attr("dy", "0.34em").attr("text-anchor", "end")
+      .attr("font-size", 12.5).attr("fill", css("--ink-2")).text(d.name);
+    svg.append("g").selectAll("rect").data(d.islands).join("rect")
+      .attr("x", i => x(i.s)).attr("y", cy).attr("height", bh).attr("rx", 2)
+      .attr("width", i => Math.max(1.5, x(i.e) - x(i.s) - 1))
+      .attr("fill", d.zone === "FOREIGN" ? colInt : colDom);
+    svg.append("rect").attr("x", m.l).attr("width", width - m.l - m.r).attr("y", y(d.icao) - 3).attr("height", y.step()).attr("fill", "transparent")
+      .on("pointermove", ev => {
+        const dt = x.invert(d3.pointer(ev)[0]);
+        const hit = d.islands.find(i => dt >= i.s && dt < i.e);
+        showTip(`<b>Toulouse – ${d.name}</b><br>${d.months} months published since ${d.first.getFullYear()}` +
+          (hit ? `<br><span class="m">${hit.start} → ${hit.end}: ${hit.months} months, ${fmtInt(hit.pax)} pax</span>` : `<br><span class="m">${dt.getFullYear()}: not published</span>`), ev);
+      }).on("pointerleave", hideTip);
+  });
+  table("table-routes", [["Route", r => "Toulouse – " + r.name], ["From", r => r.start], ["To", r => r.end], ["Months", r => r.months], ["Passengers", r => fmtInt(r.pax)]],
+    byDest.flatMap(d => d.islands.map(i => ({ ...i, name: d.name }))));
+}
+
+/* ---------- 06 forecast ---------- */
+function drawForecast() {
+  const act = D.monthly.filter(r => r.month >= "2022-01").map(r => ({ date: parseMonth(r.month), pax: r.pax }));
+  const fc = fcEns.map(r => ({ ...r, date: parseMonth(r.month) }));
+  const H = 300;
+  const { svg, width } = svgFor("chart-forecast", H);
+  const m = { t: 18, r: 10, b: 28, l: 44 };
+  const x = d3.scaleTime().domain([act[0].date, fc[fc.length - 1].date]).range([m.l, width - m.r]);
+  const y = d3.scaleLinear().domain([0, 950000]).range([H - m.b, m.t]);
+  gridY(svg, y, m.l, width - m.r, [0, 200000, 400000, 600000, 800000], v => (v ? v / 1000 + "K" : "0"));
+  const accent = css("--accent");
+  const joined = [{ date: act[act.length - 1].date, pax: act[act.length - 1].pax, lo80: act[act.length - 1].pax, hi80: act[act.length - 1].pax, lo95: act[act.length - 1].pax, hi95: act[act.length - 1].pax }, ...fc];
+  svg.append("path").datum(joined).attr("fill", accent).attr("fill-opacity", 0.12).attr("d", d3.area().x(d => x(d.date)).y0(d => y(d.lo95)).y1(d => y(d.hi95)));
+  svg.append("path").datum(joined).attr("fill", accent).attr("fill-opacity", 0.16).attr("d", d3.area().x(d => x(d.date)).y0(d => y(d.lo80)).y1(d => y(d.hi80)));
+  svg.append("line").attr("x1", x(fc[0].date)).attr("x2", x(fc[0].date)).attr("y1", m.t).attr("y2", H - m.b).attr("stroke", css("--axis"));
+  svg.append("text").attr("class", "axis-label").attr("x", x(fc[0].date) + 6).attr("y", m.t + 4).text("Forecast →");
+  svg.append("path").datum(act).attr("fill", "none").attr("stroke", accent).attr("stroke-width", 2).attr("stroke-linejoin", "round")
+    .attr("d", d3.line().x(d => x(d.date)).y(d => y(d.pax)));
+  svg.append("path").datum(joined).attr("fill", "none").attr("stroke", accent).attr("stroke-width", 2).attr("stroke-dasharray", "5 4")
+    .attr("d", d3.line().x(d => x(d.date)).y(d => y(d.pax)));
+  const t = svg.append("g").attr("class", "tick");
+  [2022, 2023, 2024, 2025, 2026, 2027].forEach(yy => t.append("text").attr("x", x(new Date(yy, 6, 1))).attr("y", H - 8).attr("text-anchor", "middle").text(yy));
+  const all = [...act.map(d => ({ ...d, kind: "actual" })), ...fc.map(d => ({ ...d, kind: "forecast" }))];
+  const cross = svg.append("g").style("display", "none");
+  cross.append("line").attr("y1", m.t).attr("y2", H - m.b).attr("stroke", css("--axis"));
+  cross.append("circle").attr("r", 4.5).attr("fill", accent).attr("stroke", css("--surface")).attr("stroke-width", 2);
+  const bis = d3.bisector(d => d.date).center;
+  svg.append("rect").attr("x", m.l).attr("y", m.t).attr("width", width - m.l - m.r).attr("height", H - m.t - m.b).attr("fill", "transparent")
+    .on("pointermove", ev => {
+      const d = all[bis(all, x.invert(d3.pointer(ev)[0]))];
+      cross.style("display", null); cross.select("line").attr("x1", x(d.date)).attr("x2", x(d.date)); cross.select("circle").attr("cx", x(d.date)).attr("cy", y(d.pax));
+      showTip(`<b>${MONTHS[d.date.getMonth()]} ${d.date.getFullYear()}</b> · ${d.kind}<br>${fmtInt(d.pax)} passengers` +
+        (d.kind === "forecast" ? `<br><span class="m">80%: ${fmtInt(d.lo80)} – ${fmtInt(d.hi80)}</span>` : ""), ev);
+    }).on("pointerleave", () => { cross.style("display", "none"); hideTip(); });
+  table("table-forecast", [["Month", r => r.month], ["Forecast", r => fmtInt(r.pax)], ["80% low", r => fmtInt(r.lo80)], ["80% high", r => fmtInt(r.hi80)], ["95% low", r => fmtInt(r.lo95)], ["95% high", r => fmtInt(r.hi95)]], fcEns);
+}
+
+function drawSideTables() {
+  const rc = metrics._reality_check_2026 || [];
+  if (rc.length) table("reality", [["Quarter", r => r.quarter.replace("2026", "") + " 2026"], ["Forecast", r => fmtInt(r.forecast)], ["Airport", r => fmtInt(r.actual_airport)], ["Error", r => pct(r.error_pct)]], rc);
+  const names = { seasonal_naive: "Seasonal naive", sarima: "SARIMA airline", ensemble: "Average of both" };
+  const rows = Object.entries(metrics).filter(([k]) => !k.startsWith("_")).map(([k, v]) => ({ k, ...v }));
+  if (rows.length) table("mape", [["Model", r => names[r.k] || r.k], ["Dec 23 +24 m", r => r["mape_24m_from_2023-12"].toFixed(2) + "%"], ["Dec 24 +12 m", r => r["mape_12m_from_2024-12"].toFixed(2) + "%"], ["Mean", r => r.mean_mape_pct.toFixed(2) + "%"]], rows, r => r.k === sel);
+}
+
+/* ---------- 07 under the hood ---------- */
+function drawHood() {
+  const q = D.quality;
+  document.getElementById("checks").innerHTML = q.map(c =>
+    `<li><span class="pill">${c.status === "PASS" ? "✓ PASS" : "! WARN"}</span><span>${c.check_name}</span><span class="r">${c.result}</span></li>`).join("");
+  const nApt = q.find(c => c.n === 1).result.split(" / ")[0], nPap = q.find(c => c.n === 2).result.split(" / ")[0];
+  document.getElementById("pipeline").innerHTML = [
+    ["01 · Extract", "data.gouv.fr API", "2 DGAC series, 72 CSV files"],
+    ["02 · Stage", "Raw text in PostgreSQL", `${fmtInt(+nApt + +nPap)} rows, untouched`],
+    ["03 · Model", "Star schema", "3 dimensions, 3 fact tables"],
+    ["04 · Check", "7 quality tests", "counts, gaps, PEQ identity"],
+    ["05 · Analyse", "SQL", "windows, FILTER, gaps & islands"],
+    ["06 · Forecast", "SARIMA + benchmark", "written back to the database"],
+  ].map(s => `<div class="step"><div class="k">${s[0]}</div><div class="v">${s[1]}</div><div class="d">${s[2]}</div></div>`).join("");
+  if (!bench) return;
+  const labels = { A_daily_month: "Toulouse, daily traffic for one month", B_year_ranking: "Top 10 airports for one year", C_monthly_trend: "Toulouse, monthly trend over 11 years" };
+  const rows = Object.keys(labels).map(k => {
+    const base = bench.stages.baseline[k].median_ms;
+    const cands = Object.entries(bench.stages).filter(([s]) => s !== "baseline").flatMap(([s, qs]) => Object.entries(qs).filter(([n]) => n.startsWith(k)).map(([, v]) => ({ s, ms: v.median_ms, nodes: v.scan_nodes })));
+    const how = c => c.s === "matview" ? "materialized view" : c.nodes.includes("Index Only Scan") ? "B-tree index" : c.nodes.includes("Bitmap Index Scan") ? "BRIN index" : c.s === "partitioned" ? "partition pruning" : c.s;
+    const best = cands.reduce((a, b) => (b.ms < a.ms ? b : a));
+    return { k, label: labels[k], base, best, how: how(best), speed: base / best.ms };
+  });
+  document.getElementById("bench-text").innerHTML = `Median of 5 runs after a warm-up, measured with <code>EXPLAIN ANALYZE</code> on PostgreSQL ${bench.environment.postgres.split(" ")[0]} (${bench.environment.cpu_count} vCPU). The flight-level table is simulated from the real monthly totals (${fmtInt(bench.environment.rows)} rows) because the real fact tables are too small for indexes to matter.`;
+  const H = rows.length * 58 + 34;
+  const { svg, width } = svgFor("chart-bench", H);
+  const m = { t: 8, r: 70, b: 26, l: 12 };
+  const x = d3.scaleLog().domain([0.03, 1000]).range([m.l, width - m.r]);
+  const t = svg.append("g").attr("class", "tick");
+  [0.1, 1, 10, 100, 1000].forEach(v => {
+    t.append("line").attr("x1", x(v)).attr("x2", x(v)).attr("y1", m.t).attr("y2", H - m.b).attr("stroke", css("--grid"));
+    t.append("text").attr("x", x(v)).attr("y", H - 8).attr("text-anchor", "middle").text(v >= 1 ? v + " ms" : v + " ms");
+  });
+  rows.forEach((r, i) => {
+    const cy = m.t + i * 58 + 36;
+    const tt = svg.append("text").attr("x", m.l).attr("y", cy - 16).attr("font-size", 13).attr("fill", css("--ink")).attr("font-weight", 500).text(r.label);
+    tt.append("tspan").attr("fill", css("--muted")).attr("font-weight", 400).style("font-variant-numeric", "tabular-nums")
+      .text(`  ·  ${r.base.toFixed(0)} ms → ${r.best.ms < 1 ? r.best.ms.toFixed(2) : r.best.ms.toFixed(1)} ms`);
+    svg.append("line").attr("x1", x(r.best.ms)).attr("x2", x(r.base)).attr("y1", cy).attr("y2", cy).attr("stroke", css("--axis")).attr("stroke-width", 2);
+    svg.append("circle").attr("cx", x(r.base)).attr("cy", cy).attr("r", 6).attr("fill", css("--gray")).attr("stroke", css("--surface")).attr("stroke-width", 2);
+    svg.append("circle").attr("cx", x(r.best.ms)).attr("cy", cy).attr("r", 6).attr("fill", css("--accent")).attr("stroke", css("--surface")).attr("stroke-width", 2);
+    svg.append("text").attr("x", x(r.best.ms)).attr("y", cy + 20).attr("text-anchor", "middle").attr("font-size", 12).attr("fill", css("--muted")).text(r.how);
+    svg.append("text").attr("x", width - 4).attr("y", cy).attr("dy", "0.34em").attr("text-anchor", "end").attr("font-size", 15).attr("font-weight", 600).attr("fill", css("--ink"))
+      .text("×" + fmtInt(Math.round(r.speed)));
+  });
+  const sz = bench.sizes;
+  document.getElementById("bench-stats").innerHTML = [
+    [sz.btree_index[0], "B-tree index (airport, date)"], [sz.brin_index[0], "BRIN index on the date"],
+    [sz.table[0], "simulated flight table"], [sz.matview[0], "monthly materialized view"],
+  ].map(s => `<div><b>${s[0].replace("kB", "KB")}</b>${s[1]}</div>`).join("");
+  const stageRows = Object.entries(bench.stages).flatMap(([s, qs]) => Object.entries(qs).map(([n, v]) => ({ s, n, ...v })));
+  table("table-bench", [["Stage", r => r.s], ["Query", r => r.n], ["Median (ms)", r => r.median_ms], ["Plan", r => r.scan_nodes.join(", ")]], stageRows);
+}
+
+/* ---------- render, and re-render on resize / theme change ---------- */
+function drawAll() { drawAnnual(); drawRecovery(); drawHeat(); drawPpf(); drawRoutes(); drawForecast(); drawSideTables(); drawHood(); }
+drawAll();
+let rt; const redraw = () => { clearTimeout(rt); rt = setTimeout(drawAll, 120); };
+addEventListener("resize", redraw);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw);
+new MutationObserver(redraw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+})();
+</script>
+</body>
+</html>

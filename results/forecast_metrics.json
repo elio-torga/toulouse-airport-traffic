@@ -1,0 +1,41 @@
+{
+  "seasonal_naive": {
+    "mape_24m_from_2023-12": 4.14,
+    "mape_12m_from_2024-12": 3.61,
+    "mean_mape_pct": 3.88
+  },
+  "sarima": {
+    "mape_24m_from_2023-12": 3.86,
+    "mape_12m_from_2024-12": 2.93,
+    "mean_mape_pct": 3.4
+  },
+  "ensemble": {
+    "mape_24m_from_2023-12": 3.42,
+    "mape_12m_from_2024-12": 3.26,
+    "mean_mape_pct": 3.34
+  },
+  "_selected_model": "ensemble",
+  "_reality_check_2026": [
+    {
+      "quarter": "2026Q1",
+      "actual_airport": 1689291,
+      "forecast": 1727774,
+      "error_pct": 2.28,
+      "source": "https://www.air-journal.fr/?p=275367"
+    },
+    {
+      "quarter": "2026Q2",
+      "actual_airport": 2132814,
+      "forecast": 2079207,
+      "error_pct": -2.51,
+      "source": "https://www.toulouse.aeroport.fr/sites/default/files/2026-08/CP_Trafic_T2_2026.pdf"
+    },
+    {
+      "quarter": "2026Q3",
+      "actual_airport": 2015286,
+      "forecast": 1965033,
+      "error_pct": -2.49,
+      "source": "https://www.air-journal.fr/?p=278869"
+    }
+  ]
+}

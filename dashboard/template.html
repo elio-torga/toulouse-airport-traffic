@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toulouse-Blagnac Traffic, 1990–2027</title>
+<meta name="description" content="35 years of official DGAC air traffic data for Toulouse-Blagnac airport, modelled in PostgreSQL, with a 2026–2027 forecast.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: a calm instrument panel. One column of chart panels, summary first, the
+   engineering ("under the hood") last. Toulouse, the "pink city", is the only loud colour. */
+:root {
+  color-scheme: light;
+  --page: #f3f5f8;
+  --surface: #ffffff;
+  --ink: #0f1720;
+  --ink-2: #465163;
+  --muted: #6f7a89;
+  --grid: #e6e9ee;
+  --axis: #c3c9d2;
+  --border: rgba(15, 23, 32, 0.09);
+  --accent: #d6336c;          /* Toulouse */
+  --accent-ink: #b0244f;
+  --gray: #8a94a2;            /* every other airport (emphasis, not identity) */
+  --dom: #2a78d6;             /* domestic routes  (categorical slot 1) */
+  --intl: #eb6834;            /* international routes (categorical slot 2) */
+  --good: #0a7a0a;
+  --good-bg: rgba(12, 163, 12, 0.10);
+  --div-lo: #256abf;
+  --div-mid: #eef0f3;
+  --div-hi: #d03b3b;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0b0f14; --surface: #141a22; --ink: #eef1f5; --ink-2: #b4bdc9; --muted: #8893a2;
+    --grid: #222a35; --axis: #3a4452; --border: rgba(255, 255, 255, 0.08);
+    --accent: #e8508a; --accent-ink: #f07aa5; --gray: #4f5967; --dom: #3987e5; --intl: #d95926;
+    --good: #2fbf2f; --good-bg: rgba(12, 163, 12, 0.16);
+    --div-lo: #3987e5; --div-mid: #2a323d; --div-hi: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0b0f14; --surface: #141a22; --ink: #eef1f5; --ink-2: #b4bdc9; --muted: #8893a2;
+  --grid: #222a35; --axis: #3a4452; --border: rgba(255, 255, 255, 0.08);
+  --accent: #e8508a; --accent-ink: #f07aa5; --gray: #4f5967; --dom: #3987e5; --intl: #d95926;
+  --good: #2fbf2f; --good-bg: rgba(12, 163, 12, 0.16);
+  --div-lo: #3987e5; --div-mid: #2a323d; --div-hi: #e66767;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--page); color: var(--ink);
+  font: 400 16px/1.55 var(--font-body);
+}
+a { color: var(--accent-ink); text-underline-offset: 2px; }
+a:focus-visible, summary:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+
+/* ---------- header ---------- */
+.board {
+  font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.04em; color: var(--ink-2);
+  border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.board .wrap { display: flex; flex-wrap: wrap; gap: 6px 22px; padding-top: 10px; padding-bottom: 10px; }
+.board b { color: var(--ink); font-weight: 500; }
+.board .code { color: var(--accent-ink); font-weight: 500; }
+header.hero { padding: 44px 0 8px; }
+.eyebrow { font: 500 13px/1.3 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+h1 {
+  font: 700 clamp(34px, 5.4vw, 56px)/1.04 var(--font-display); letter-spacing: -0.01em;
+  margin: 0 0 16px; text-wrap: balance; max-width: 20ch;
+}
+h1 em { font-style: normal; color: var(--accent); }
+.lede { font-size: 18px; color: var(--ink-2); max-width: 64ch; margin: 0 0 6px; }
+.byline { font-size: 14px; color: var(--muted); margin: 14px 0 0; }
+
+/* ---------- KPI tiles ---------- */
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 28px 0 8px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px 14px; }
+.kpi .label { font-size: 13.5px; color: var(--ink-2); margin: 0 0 6px; }
+.kpi .value { font: 600 34px/1.05 var(--font-body); letter-spacing: -0.01em; margin: 0; }
+.kpi .value small { font-size: 18px; font-weight: 500; color: var(--ink-2); margin-left: 2px; }
+.kpi .delta { font-size: 13.5px; color: var(--muted); margin: 8px 0 0; }
+.kpi .delta .down { color: var(--accent-ink); font-weight: 500; }
+.kpi.lead .value { color: var(--accent); }
+
+/* ---------- panels ---------- */
+section.panel {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 26px 26px 18px; margin: 18px 0;
+}
+.panel-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 24px; align-items: end; margin-bottom: 8px; }
+.num { font: 500 12.5px var(--font-mono); color: var(--muted); letter-spacing: 0.06em; margin: 0 0 6px; }
+h2 { font: 600 clamp(22px, 2.6vw, 28px)/1.15 var(--font-display); margin: 0; text-wrap: balance; }
+.panel p.text { color: var(--ink-2); max-width: 70ch; margin: 10px 0 4px; }
+.panel p.text strong { color: var(--ink); font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
+.legend i.line { width: 18px; height: 2px; border-radius: 1px; }
+.legend i.dash { width: 18px; height: 0; border-top: 2px dashed var(--accent); border-radius: 0; background: none !important; }
+.chart { position: relative; width: 100%; margin-top: 14px; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { font-family: var(--font-body); }
+.tick text, .axis-label { font-size: 12px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.note { font-size: 13px; color: var(--muted); margin: 10px 0 0; max-width: 80ch; }
+.split { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+.facts { display: grid; gap: 10px; margin-top: 14px; }
+.fact { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; }
+.fact .big { font: 600 24px/1.15 var(--font-body); }
+.fact .small { font-size: 13.5px; color: var(--ink-2); }
+
+details.table-view { margin-top: 12px; border-top: 1px solid var(--grid); padding-top: 8px; }
+details.table-view summary { cursor: pointer; font-size: 13px; color: var(--muted); width: max-content; }
+details.table-view .scroll { overflow-x: auto; max-height: 340px; overflow-y: auto; margin-top: 8px; }
+table { border-collapse: collapse; font-size: 13px; width: 100%; }
+th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
+tr.hl td { color: var(--ink); font-weight: 600; }
+
+/* ---------- under the hood ---------- */
+.hood-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px; margin-top: 16px; }
+.hood-grid > div, .split > div { min-width: 0; }
+#reality, #mape { overflow-x: auto; }
+.hood-grid h3 { font: 600 17px/1.3 var(--font-display); margin: 0 0 8px; }
+.pipeline { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin-top: 14px; }
+.step { flex: 1 1 140px; background: var(--page); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; position: relative; }
+.step .k { font: 500 11.5px var(--font-mono); color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; }
+.step .v { font-size: 14px; font-weight: 600; margin-top: 3px; }
+.step .d { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+.checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.checks li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13.5px; }
+.pill { font: 600 11.5px var(--font-mono); letter-spacing: 0.04em; color: var(--good); background: var(--good-bg); border-radius: 999px; padding: 2px 8px 2px 6px; white-space: nowrap; }
+.checks .r { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.schema { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; font-size: 12.5px; }
+.tbl { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--page); }
+.tbl.fact-t { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.tbl .n { font: 500 12px var(--font-mono); color: var(--ink); margin-bottom: 3px; overflow-wrap: anywhere; }
+.tbl .c { font-family: var(--font-mono); color: var(--muted); line-height: 1.5; }
+code { font-family: var(--font-mono); font-size: 0.92em; }
+pre.sql { margin: 10px 0 0; background: var(--page); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font: 12.5px/1.55 var(--font-mono); color: var(--ink-2); }
+pre.sql .kw { color: var(--accent-ink); font-weight: 500; }
+.stat-row { display: flex; flex-wrap: wrap; gap: 18px 32px; margin-top: 12px; }
+.stat-row div { font-size: 13px; color: var(--ink-2); }
+.stat-row b { display: block; font-size: 22px; font-weight: 600; color: var(--ink); }
+
+footer { color: var(--muted); font-size: 13px; padding: 18px 0 48px; }
+footer p { margin: 6px 0; max-width: 90ch; }
+
+/* ---------- tooltip ---------- */
+#tip {
+  position: fixed; z-index: 10; pointer-events: none; opacity: 0; transition: opacity 0.12s;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14); padding: 8px 11px; font-size: 13px; line-height: 1.45; max-width: 260px;
+}
+#tip b { font-weight: 600; }
+#tip .m { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { #tip { transition: none; } }
+
+@media (max-width: 860px) {
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .split, .hood-grid { grid-template-columns: 1fr; }
+  .panel-head { grid-template-columns: 1fr; }
+}
+@media (max-width: 420px) {
+  .wrap { padding: 0 16px; }
+  section.panel { padding: 20px 16px 14px; }
+  .kpi .value { font-size: 28px; }
+  .schema { grid-template-columns: 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="board" aria-label="Airport identification">
+  <div class="wrap">
+    <span><span class="code">LFBO</span> / <b>TLS</b></span>
+    <span><b>Toulouse-Blagnac</b> · Haute-Garonne</span>
+    <span>DGAC monthly commercial traffic · <b>Jan 1990 – Dec 2025</b></span>
+    <span>Forecast <b>2026–2027</b></span>
+  </div>
+</div>
+
+<main class="wrap">
+  <header class="hero">
+    <p class="eyebrow">A data project on official French air traffic statistics</p>
+    <h1>35 years of air traffic at <em>Toulouse-Blagnac</em></h1>
+    <p class="lede">Traffic tripled in three decades, then Covid wiped out two thirds of it in a single year. Six years on, Toulouse has recovered less of its 2019 traffic than most large French regional airports, and the model expects 2026–2027 to stay flat.</p>
+    <p class="byline">By Elio Torga · Data: DGAC via data.gouv.fr · PostgreSQL, Python, D3</p>
+  </header>
+
+  <div class="kpis" id="kpis"></div>
+
+  <section class="panel" id="growth" aria-labelledby="h-growth">
+    <div class="panel-head">
+      <div><p class="num">01 · Annual passengers</p><h2 id="h-growth">Three decades of growth, then one cliff</h2></div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>Actual</span><span><i style="background:var(--accent);opacity:.35"></i>Forecast</span></div>
+    </div>
+    <p class="text" id="growth-text"></p>
+    <div class="chart" id="chart-annual"></div>
+    <details class="table-view"><summary>View data table</summary><div class="scroll" id="table-annual"></div></details>
+  </section>
+
+  <section class="panel" id="recovery" aria-labelledby="h-recovery">
+    <div class="split">
+      <div>
+        <p class="num">02 · Post-Covid recovery</p>
+        <h2 id="h-recovery">Toulouse recovered less than most of its peers</h2>
+        <p class="text" id="recovery-text"></p>
+        <div class="chart" id="chart-recovery"></div>
+      </div>
+      <div>
+        <div class="facts" id="recovery-facts"></div>
+        <p class="note">Domestic and international split from the airport's Q2 2026 press release; the DGAC airport series does not separate them. Like-for-like Orly figure from the DGAC route series, on the months published in both years.</p>
+      </div>
+    </div>
+    <details class="table-view"><summary>View data table</summary><div class="scroll" id="table-recovery"></div></details>
+  </section>
+
+  <section class="panel" id="season" aria-labelledby="h-season">
+    <div class="panel-head">
+      <div><p class="num">03 · Seasonality</p><h2 id="h-season">The busy season moved to summer</h2></div>
+      <div class="legend" id="season-legend"></div>
+    </div>
+    <p class="text" id="season-text"></p>
+    <div class="chart" id="chart-heat"></div>
+    <p class="note">Each cell compares a month with the average month of the same year. 2020 and 2021 run off the scale (Covid) and are clamped to its ends.</p>
+    <details class="table-view"><summary>View data table</summary><div class="scroll" id="table-season"></div></details>
+  </section>
+
+  <section class="panel" id="planes" aria-labelledby="h-planes">
+    <div class="panel-head">
+      <div><p class="num">04 · Passengers per flight</p><h2 id="h-planes">Planes got bigger and fuller</h2></div>
+    </div>
+    <p class="text" id="planes-text"></p>
+    <div class="chart" id="chart-ppf"></div>
+    <details class="table-view"><summary>View data table</summary><div class="scroll" id="table-ppf"></div></details>
+  </section>
+
+  <section class="panel" id="routes" aria-labelledby="h-routes">
+    <div class="panel-head">
+      <div><p class="num">05 · Route data</p><h2 id="h-routes">Route figures exist only where airlines compete</h2></div>
+      <div class="legend"><span><i style="background:var(--dom)"></i>Domestic</span><span><i style="background:var(--intl)"></i>International</span></div>
+    </div>
+    <p class="text" id="routes-text"></p>
+    <div class="chart" id="chart-routes"></div>
+    <p class="note">Each bar is a run of consecutive published months, found with a gaps-and-islands SQL query. Routes shown: published for at least 12 months.</p>
+    <details class="table-view"><summary>View data table</summary><div class="scroll" id="table-routes"></div></details>
+  </section>
+
+  <section class="panel" id="forecast" aria-labelledby="h-forecast">
+    <div class="split">
+      <div>
+        <p class="num">06 · Forecast</p>
+        <h2 id="h-forecast">2026–2027: a plateau around 7.7 million</h2>
+        <p class="text" id="forecast-text"></p>
+        <div class="legend" style="margin-top:10px"><span><i class="line" style="background:var(--accent)"></i>Actual (DGAC)</span><span><i class="dash"></i>Forecast</span><span><i style="background:var(--accent);opacity:.28"></i>80% interval</span><span><i style="background:var(--accent);opacity:.12"></i>95% interval</span></div>
+        <div class="chart" id="chart-forecast"></div>
+      </div>
+      <div>
+        <h3 style="font:600 17px/1.3 var(--font-display);margin:4px 0 8px">Reality check: 2026 so far</h3>
+        <p class="note" style="margin-top:0">The model only saw data up to December 2025. The airport has since published three quarters.</p>
+        <div id="reality"></div>
+        <h3 style="font:600 17px/1.3 var(--font-display);margin:20px 0 8px">Backtest error (MAPE)</h3>
+        <div id="mape"></div>
+      </div>
+    </div>
+    <details class="table-view"><summary>View data table</summary><div class="scroll" id="table-forecast"></div></details>
+  </section>
+
+  <section class="panel" id="hood" aria-labelledby="h-hood">
+    <p class="num">07 · Under the hood</p>
+    <h2 id="h-hood">How it is built</h2>
+    <div class="pipeline" id="pipeline"></div>
+    <div class="hood-grid">
+      <div>
+        <h3>Star schema</h3>
+        <div class="schema">
+          <div class="tbl"><div class="n">dim_date</div><div class="c">date_id (YYYYMM)<br>year · month · is_covid</div></div>
+          <div class="tbl fact-t"><div class="n">fact_airport_traffic</div><div class="c">pax dep · arr · transit<br>freight · movements</div></div>
+          <div class="tbl"><div class="n">dim_airport</div><div class="c">icao · name<br>zone · is_french</div></div>
+          <div class="tbl"><div class="n">dim_route</div><div class="c">route_code<br>airport_1 · airport_2 · km</div></div>
+          <div class="tbl fact-t"><div class="n">fact_route_traffic</div><div class="c">pax local · on board<br>services · movements</div></div>
+          <div class="tbl"><div class="n">fact_forecast</div><div class="c">model · pax<br>80% · 95% bounds</div></div>
+        </div>
+        <pre class="sql"><span class="kw">WITH</span> islands <span class="kw">AS</span> (
+  <span class="kw">SELECT</span> dest_icao, month_start,
+         month_start - (<span class="kw">ROW_NUMBER() OVER</span> (
+           <span class="kw">PARTITION BY</span> dest_icao <span class="kw">ORDER BY</span> month_start)
+           * <span class="kw">interval</span> '1 month') <span class="kw">AS</span> island_key
+  <span class="kw">FROM</span> published)
+<span class="kw">SELECT</span> dest_icao, <span class="kw">MIN</span>(month_start), <span class="kw">MAX</span>(month_start)
+<span class="kw">FROM</span> islands <span class="kw">GROUP BY</span> dest_icao, island_key;</pre>
+      </div>
+      <div>
+        <h3>Data quality checks</h3>
+        <ul class="checks" id="checks"></ul>
+      </div>
+    </div>
+    <div style="margin-top:26px">
+      <h3 style="font:600 17px/1.3 var(--font-display);margin:0">Query performance on 17.7 million simulated flights</h3>
+      <p class="text" id="bench-text"></p>
+      <div class="legend" style="margin-top:8px"><span><i style="background:var(--gray)"></i>No index</span><span><i style="background:var(--accent)"></i>Best optimisation</span></div>
+      <div class="chart" id="chart-bench"></div>
+      <div class="stat-row" id="bench-stats"></div>
+    </div>
+    <details class="table-view"><summary>View benchmark table</summary><div class="scroll" id="table-bench"></div></details>
+  </section>
+
+  <footer>
+    <p><b>Data.</b> DGAC, <a href="https://www.data.gouv.fr/datasets/64808a5811da153f1439914c">Trafic aérien commercial mensuel français</a> (series APT and PAP, Licence Ouverte 2.0), January 1990 to December 2025. Passengers = departing + arriving + transit. 2026 quarterly figures and the domestic/international split come from the airport's press releases (<a href="https://www.air-journal.fr/?p=275367">Q1</a>, <a href="https://www.toulouse.aeroport.fr/sites/default/files/2026-08/CP_Trafic_T2_2026.pdf">Q2</a>, <a href="https://www.air-journal.fr/?p=278869">Q3</a>).</p>
+    <p><b>Method.</b> Raw CSV loaded untouched into a PostgreSQL staging schema, typed into a star schema, checked, analysed in SQL; forecast with a SARIMA(0,1,1)(0,1,1)<sub>12</sub> airline model averaged with a seasonal-naive benchmark. The benchmark table is simulated from real monthly totals and used only for performance tests.</p>
+  </footer>
+</main>
+
+<div id="tip" role="tooltip"></div>
+<script id="data" type="application/json">__DATA__</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+(() => {
+"use strict";
+const D = JSON.parse(document.getElementById("data").textContent);
+
+/* ---------- helpers ---------- */
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmtInt = d3.format(",");
+const fmtM = v => (v / 1e6).toFixed(2) + "M";
+const fmtM1 = v => (v / 1e6).toFixed(1) + "M";
+const pct = (v, d = 1) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d) + "%";
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const parseMonth = d3.timeParse("%Y-%m");
+const SHORT = { LFOB: "Beauvais", LFML: "Marseille", LFSB: "Basel-Mulhouse", LFMN: "Nice", LFRS: "Nantes",
+  LFLL: "Lyon", LFMT: "Montpellier", LFBO: "Toulouse", LFQQ: "Lille", LFBD: "Bordeaux", LFPO: "Paris-Orly",
+  LFPG: "Paris-CDG", LFST: "Strasbourg", LEMD: "Madrid", EHAM: "Amsterdam", EGKK: "London-Gatwick",
+  EDHI: "Hamburg-Finkenwerder", LIRF: "Rome-Fiumicino", LPPT: "Lisbon", LEPA: "Palma de Mallorca",
+  LSGG: "Geneva", GMMX: "Marrakesh", EBBR: "Brussels", GMMN: "Casablanca", EGGD: "Bristol",
+  EDDB: "Berlin-Brandenburg", LPPR: "Porto", EDDH: "Hamburg", LEZL: "Seville", LFKF: "Figari" };
+const titleCase = s => s.toLowerCase().replace(/(^|[\s-])\p{L}/gu, m => m.toUpperCase());
+const shortName = (icao, name) => SHORT[icao] || titleCase(name);
+const yearTicks = w => (w < 620 ? [1990, 2000, 2010, 2020] : [1990, 1995, 2000, 2005, 2010, 2015, 2020, 2025]);
+
+const tip = document.getElementById("tip");
+function showTip(html, ev) {
+  tip.innerHTML = html; tip.style.opacity = 1;
+  const r = tip.getBoundingClientRect(), pad = 14;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - pad;
+  if (y + r.height > innerHeight - 8) y = ev.clientY - r.height - pad;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+const hideTip = () => { tip.style.opacity = 0; };
+
+function table(el, cols, rows, hl) {
+  const t = document.createElement("table");
+  t.innerHTML = "<thead><tr>" + cols.map(c => `<th scope="col">${c[0]}</th>`).join("") + "</tr></thead><tbody>" +
+    rows.map(r => `<tr${hl && hl(r) ? ' class="hl"' : ""}>` + cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("") + "</tbody>";
+  document.getElementById(el).replaceChildren(t);
+}
+function svgFor(id, height) {
+  const el = document.getElementById(id);
+  const width = Math.max(300, el.clientWidth);
+  el.replaceChildren();
+  const svg = d3.select(el).append("svg").attr("viewBox", `0 0 ${width} ${height}`).attr("role", "img");
+  return { svg, width, el };
+}
+// bar with 4px rounded data end, square at the baseline
+function vBar(x, y, w, h, r = 4) {
+  r = Math.min(r, h, w / 2);
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+function hBar(x, y, w, h, r = 4) {
+  r = Math.min(r, w, h / 2);
+  return `M${x},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h - r}Q${x + w},${y + h} ${x + w - r},${y + h}H${x}Z`;
+}
+function gridY(g, y, x0, x1, ticks, fmt) {
+  const t = g.append("g").attr("class", "tick");
+  ticks.forEach(v => {
+    t.append("line").attr("x1", x0).attr("x2", x1).attr("y1", y(v)).attr("y2", y(v))
+      .attr("stroke", v === 0 ? css("--axis") : css("--grid")).attr("stroke-width", 1);
+    t.append("text").attr("x", x0 - 8).attr("y", y(v)).attr("dy", "0.32em").attr("text-anchor", "end").text(fmt(v));
+  });
+}
+
+/* ---------- data shaping ---------- */
+const annual = D.annual;
+const byYear = Object.fromEntries(annual.map(r => [r.year, r]));
+const last = annual[annual.length - 1], prev = byYear[last.year - 1], y2019 = byYear[2019];
+const peak = annual.reduce((a, b) => (b.pax > a.pax ? b : a));
+const fcEns = D.forecast.filter(r => r.model === "ensemble");
+const fcYears = d3.rollups(fcEns, v => d3.sum(v, d => d.pax), d => +d.month.slice(0, 4)).map(([year, pax]) => ({ year, pax, forecast: true }));
+const tls = D.recovery.find(r => r.icao === "LFBO");
+const metrics = D.forecast_metrics || {};
+const bench = D.benchmark || null;
+
+/* ---------- KPI tiles ---------- */
+const bestRank = d3.min(annual, d => d.rank);
+const bestRankYears = annual.filter(d => d.rank === bestRank).map(d => d.year);
+const y2000 = byYear[2000];
+document.getElementById("kpis").innerHTML = [
+  { cls: "lead", label: `Passengers in ${last.year}`, value: (last.pax / 1e6).toFixed(2) + "<small>M</small>",
+    delta: `<span class="down">${pct((last.pax / prev.pax - 1) * 100)}</span> vs ${prev.year}` },
+  { label: "Share of 2019 traffic regained", value: Math.round(last.pax / y2019.pax * 100) + "<small>%</small>",
+    delta: `${fmtM(y2019.pax)} passengers in 2019` },
+  { label: "Rank among French airports", value: last.rank + "<small>th</small>",
+    delta: `${bestRank}th in ${bestRankYears.join("–")}, its best` },
+  { label: "Passengers per commercial flight", value: Math.round(last.pax_per_flight),
+    delta: `${Math.round(y2000.pax_per_flight)} in 2000` },
+].map(k => `<div class="kpi ${k.cls || ""}"><p class="label">${k.label}</p><p class="value">${k.value}</p><p class="delta">${k.delta}</p></div>`).join("");
+
+/* ---------- texts ---------- */
+const covidDrop = (byYear[2020].pax / y2019.pax - 1) * 100;
+document.getElementById("growth-text").innerHTML =
+  `From <strong>${fmtM(annual[0].pax)}</strong> passengers in ${annual[0].year} to a peak of <strong>${fmtM(peak.pax)}</strong> in ${peak.year}, Toulouse tripled its traffic. ` +
+  `In 2020 it lost <strong>${Math.abs(covidDrop).toFixed(0)}%</strong> in a year. Traffic bounced back in 2022–2023, then stalled: ${last.year} closed at <strong>${fmtM(last.pax)}</strong>.`;
+const beauvais = D.recovery[0];
+const weaker = D.recovery.filter(r => r.recovery_pct < tls.recovery_pct).map(r => SHORT[r.icao]);
+document.getElementById("recovery-text").innerHTML =
+  `Passengers in 2025 as a share of 2019, for the ten largest airports outside Paris. Toulouse is at <strong>${tls.recovery_pct.toFixed(1)}%</strong>; only ${weaker.join(" and ")} did worse. ` +
+  `${SHORT[beauvais.icao]}, a low-cost base, grew by ${Math.round(beauvais.recovery_pct - 100)}%.`;
+const o = D.orly;
+document.getElementById("recovery-facts").innerHTML = [
+  { big: `${o.change_pct.toFixed(0)}%`, small: `Toulouse–Paris-Orly passengers, 2025 vs 2019, same ${o.common_months} calendar months (DGAC route data)` },
+  { big: "65% vs 101%", small: "Domestic vs international traffic in Q2 2026, as a share of Q2 2019 (airport figures)" },
+  { big: "31 Mar 2025", small: "easyJet closed its Toulouse base, the airport's explanation for the 2025 dip" },
+].map(f => `<div class="fact"><div class="big">${f.big}</div><div class="small">${f.small}</div></div>`).join("");
+
+const sh = (dec, m) => D.seasonality.find(r => r.decade === dec && r.month === m).share_pct;
+document.getElementById("season-text").innerHTML =
+  `In the 1990s, August was Toulouse's quietest month (<strong>${sh(1990, 8).toFixed(1)}%</strong> of the year's passengers); in the 2020s it carries <strong>${sh(2020, 8).toFixed(1)}%</strong>. ` +
+  `January fell from ${sh(1990, 1).toFixed(1)}% to ${sh(2020, 1).toFixed(1)}%. A business airport turned into a leisure one.`;
+
+const minPpf = annual.reduce((a, b) => (b.pax_per_flight < a.pax_per_flight ? b : a));
+document.getElementById("planes-text").innerHTML =
+  `Average passengers per commercial passenger flight. After a low of <strong>${minPpf.pax_per_flight.toFixed(0)}</strong> in ${minPpf.year}, the figure nearly doubled to <strong>${last.pax_per_flight.toFixed(0)}</strong> in ${last.year}: ` +
+  `${fmtInt(last.flights)} flights carried ${fmtM1(last.pax)} passengers, against ${fmtInt(byYear[2000].flights)} flights for ${fmtM1(byYear[2000].pax)} in 2000. That shift matches the rise of low-cost carriers, which flew half of Toulouse's passengers in 2025.`;
+
+document.getElementById("routes-text").innerHTML =
+  `French statistical secrecy rules publish a route's monthly traffic only when at least three airlines fly it and none has more than 85% of it. ` +
+  `So the DGAC route series is full of holes, and annual route totals cannot be compared. The gaps below are the data, not missing values.`;
+
+const fy = y => fcYears.find(r => r.year === y).pax;
+const sel = metrics._selected_model || "ensemble";
+document.getElementById("forecast-text").innerHTML =
+  `Monthly passengers, with the forecast from January 2026. The selected model (${sel === "ensemble" ? "average of a SARIMA airline model and a seasonal-naive benchmark" : sel}) expects <strong>${fmtM(fy(2026))}</strong> in 2026 and <strong>${fmtM(fy(2027))}</strong> in 2027: still about 20% below 2019.`;
+
+/* ---------- 01 annual columns ---------- */
+function drawAnnual() {
+  const rows = [...annual.map(r => ({ ...r, forecast: false })), ...fcYears];
+  const { svg, width } = svgFor("chart-annual", 330);
+  const m = { t: 26, r: 8, b: 30, l: 44 }, H = 330;
+  const x = d3.scaleBand().domain(rows.map(d => d.year)).range([m.l, width - m.r]).padding(0.28);
+  const y = d3.scaleLinear().domain([0, 10.5e6]).range([H - m.b, m.t]);
+  gridY(svg, y, m.l, width - m.r, [0, 2e6, 4e6, 6e6, 8e6, 10e6], v => (v ? v / 1e6 + "M" : "0"));
+  const bw = Math.min(24, x.bandwidth());
+  const accent = css("--accent");
+  const g = svg.append("g");
+  g.selectAll("path").data(rows).join("path")
+    .attr("d", d => vBar(x(d.year) + (x.bandwidth() - bw) / 2, y(d.pax), bw, y(0) - y(d.pax)))
+    .attr("fill", accent).attr("fill-opacity", d => (d.forecast ? 0.35 : 1));
+  // x axis labels: every 5 years + forecast years
+  const xt = svg.append("g").attr("class", "tick");
+  const narrow = width < 620;
+  rows.filter(d => (narrow ? d.year % 10 === 0 : d.year % 5 === 0 || d.year === 2027)).forEach(d => {
+    xt.append("text").attr("x", x(d.year) + x.bandwidth() / 2).attr("y", H - m.b + 18).attr("text-anchor", "middle").text(d.year);
+  });
+  // selective labels
+  const lab = [[annual[0], fmtM(annual[0].pax)], [peak, fmtM(peak.pax) + " peak"], [byYear[2020], fmtM(byYear[2020].pax)],
+               [last, fmtM(last.pax)], [fcYears[fcYears.length - 1], fmtM(fcYears[fcYears.length - 1].pax) + " f."]];
+  const lg = svg.append("g").attr("font-size", 12).attr("fill", css("--ink-2"));
+  lab.forEach(([d, t], i) => {
+    const cx = x(d.year) + x.bandwidth() / 2;
+    if (narrow && (i === 2 || i === 4)) return;   // no room on a phone: the table view carries them
+    if (d.year === 2020) {   // tall 2019 and 2022 columns on both sides: centre it over the 2020-2021 gap
+      lg.append("text").attr("x", x(2021)).attr("y", y(byYear[2021].pax) - 7).attr("text-anchor", "middle").attr("fill", css("--ink-2")).text(t);
+      return;
+    }
+    lg.append("text").attr("x", cx).attr("y", y(d.pax) - 7).attr("text-anchor", i === 0 ? "start" : i >= 3 ? "end" : "middle")
+      .attr("dx", i === 0 ? -bw / 2 : i >= 3 ? bw / 2 : 0).attr("font-weight", d === peak || d === last ? 600 : 400)
+      .attr("fill", d === peak || d === last ? css("--ink") : css("--ink-2")).text(t);
+  });
+  // hover targets: full band height
+  svg.append("g").selectAll("rect").data(rows).join("rect")
+    .attr("x", d => x(d.year) - x.step() * x.paddingInner() / 2).attr("width", x.step()).attr("y", m.t).attr("height", H - m.t - m.b)
+    .attr("fill", "transparent")
+    .on("pointermove", (ev, d) => {
+      const pv = byYear[d.year - 1] || fcYears.find(f => f.year === d.year - 1);
+      showTip(`<b>${d.year}${d.forecast ? " · forecast" : ""}</b><br>${fmtInt(Math.round(d.pax))} passengers` +
+        (pv ? `<br><span class="m">${pct((d.pax / pv.pax - 1) * 100)} vs ${d.year - 1}</span>` : "") +
+        (d.rank ? `<br><span class="m">Rank in France: ${d.rank}</span>` : ""), ev);
+    }).on("pointerleave", hideTip);
+  table("table-annual", [["Year", r => r.year], ["Passengers", r => fmtInt(Math.round(r.pax))], ["Change", r => r.growth == null ? "" : r.growth],
+    ["Rank in France", r => r.rank || "forecast"], ["Pax per flight", r => r.pax_per_flight || ""]],
+    rows.map((r, i) => ({ ...r, growth: i ? pct((r.pax / rows[i - 1].pax - 1) * 100) : null })), r => r.year === peak.year || r.year === last.year);
+}
+
+/* ---------- 02 recovery bars ---------- */
+function drawRecovery() {
+  const rows = D.recovery;
+  const H = rows.length * 30 + 40;
+  const { svg, width } = svgFor("chart-recovery", H);
+  const m = { t: 22, r: 52, b: 14, l: 112 };
+  const x = d3.scaleLinear().domain([0, Math.max(170, d3.max(rows, d => d.recovery_pct))]).range([m.l, width - m.r]);
+  const y = d3.scaleBand().domain(rows.map(d => d.icao)).range([m.t, H - m.b]).padding(0.32);
+  const bh = Math.min(18, y.bandwidth());
+  // reference line at 100%
+  svg.append("line").attr("x1", x(100)).attr("x2", x(100)).attr("y1", m.t - 8).attr("y2", H - m.b)
+    .attr("stroke", css("--axis")).attr("stroke-width", 1);
+  svg.append("text").attr("class", "axis-label").attr("x", x(100) + 5).attr("y", m.t - 10).text("2019 level");
+  rows.forEach(d => {
+    const isT = d.icao === "LFBO", cy = y(d.icao) + (y.bandwidth() - bh) / 2;
+    svg.append("path").attr("d", hBar(x(0), cy, x(d.recovery_pct) - x(0), bh)).attr("fill", isT ? css("--accent") : css("--gray"));
+    svg.append("text").attr("x", m.l - 10).attr("y", cy + bh / 2).attr("dy", "0.34em").attr("text-anchor", "end")
+      .attr("font-size", 13).attr("font-weight", isT ? 600 : 400).attr("fill", isT ? css("--ink") : css("--ink-2")).text(SHORT[d.icao]);
+    svg.append("text").attr("x", x(d.recovery_pct) + 6).attr("y", cy + bh / 2).attr("dy", "0.34em")
+      .attr("font-size", 12.5).attr("font-weight", isT ? 600 : 400).attr("fill", isT ? css("--ink") : css("--ink-2"))
+      .style("font-variant-numeric", "tabular-nums").text(d.recovery_pct.toFixed(0) + "%");
+    svg.append("rect").attr("x", 0).attr("width", width).attr("y", y(d.icao) - y.step() * y.paddingInner() / 2).attr("height", y.step())
+      .attr("fill", "transparent")
+      .on("pointermove", ev => showTip(`<b>${titleCase(d.name)}</b><br>2019: ${fmtInt(d.pax_2019)}<br>2025: ${fmtInt(d.pax_2025)}<br><span class="m">${d.recovery_pct}% of 2019</span>`, ev))
+      .on("pointerleave", hideTip);
+  });
+  table("table-recovery", [["Airport", r => titleCase(r.name)], ["2019", r => fmtInt(r.pax_2019)], ["2025", r => fmtInt(r.pax_2025)], ["2025 / 2019", r => r.recovery_pct + "%"]],
+    rows, r => r.icao === "LFBO");
+}
+
+/* ---------- 03 seasonality heatmap ---------- */
+function drawHeat() {
+  const monthly = D.monthly.map(r => ({ ...r, date: parseMonth(r.month), year: +r.month.slice(0, 4), m: +r.month.slice(5, 7) }));
+  const yearTot = d3.rollup(monthly, v => d3.sum(v, d => d.pax), d => d.year);
+  monthly.forEach(d => { d.idx = d.pax / (yearTot.get(d.year) / 12); });
+  const years = [...yearTot.keys()];
+  const { svg, width } = svgFor("chart-heat", 12 * 22 + 46);
+  const m = { t: 6, r: 4, b: 26, l: 36 }, H = 12 * 22 + 46;
+  const x = d3.scaleBand().domain(years).range([m.l, width - m.r]).paddingInner(0.08);
+  const y = d3.scaleBand().domain(d3.range(1, 13)).range([m.t, H - m.b]).paddingInner(0.08);
+  const color = d3.scaleDiverging().domain([0.6, 1, 1.4]).clamp(true)
+    .interpolator(t => t < 0.5 ? d3.interpolateLab(css("--div-lo"), css("--div-mid"))(t * 2) : d3.interpolateLab(css("--div-mid"), css("--div-hi"))((t - 0.5) * 2));
+  svg.append("g").selectAll("rect").data(monthly).join("rect")
+    .attr("x", d => x(d.year)).attr("y", d => y(d.m)).attr("width", x.bandwidth()).attr("height", y.bandwidth()).attr("rx", 2)
+    .attr("fill", d => color(d.idx))
+    .on("pointermove", (ev, d) => showTip(`<b>${MONTHS[d.m - 1]} ${d.year}</b><br>${fmtInt(d.pax)} passengers<br><span class="m">${pct((d.idx - 1) * 100, 0)} vs the year's average month</span>`, ev))
+    .on("pointerleave", hideTip);
+  const t = svg.append("g").attr("class", "tick");
+  d3.range(1, 13).forEach(mm => t.append("text").attr("x", m.l - 6).attr("y", y(mm) + y.bandwidth() / 2).attr("dy", "0.32em").attr("text-anchor", "end").text(MONTHS[mm - 1]));
+  years.filter(yy => yy % 5 === 0).forEach(yy => t.append("text").attr("x", x(yy) + x.bandwidth() / 2).attr("y", H - 8).attr("text-anchor", "middle").text(yy));
+  // legend: gradient
+  const lw = 150;
+  const leg = d3.select("#season-legend").html("");
+  const ls = leg.append("svg").attr("width", lw + 120).attr("height", 30).attr("aria-hidden", "true");
+  const gid = "grad-season";
+  const grad = ls.append("defs").append("linearGradient").attr("id", gid);
+  d3.range(0, 1.01, 0.1).forEach(s => grad.append("stop").attr("offset", s).attr("stop-color", color(0.6 + 0.8 * s)));
+  ls.append("text").attr("x", 0).attr("y", 15).attr("font-size", 12).attr("fill", css("--muted")).text("−40%");
+  ls.append("rect").attr("x", 38).attr("y", 5).attr("width", lw).attr("height", 12).attr("rx", 3).attr("fill", `url(#${gid})`);
+  ls.append("text").attr("x", 44 + lw).attr("y", 15).attr("font-size", 12).attr("fill", css("--muted")).text("+40%");
+  ls.append("text").attr("x", 38 + lw / 2).attr("y", 29).attr("font-size", 11).attr("text-anchor", "middle").attr("fill", css("--muted")).text("vs average month");
+  table("table-season", [["Month", r => MONTHS[r.month - 1]], ["1990s", r => r.d1990 + "%"], ["2000s", r => r.d2000 + "%"], ["2010s", r => r.d2010 + "%"], ["2020s", r => r.d2020 + "%"]],
+    d3.range(1, 13).map(mm => ({ month: mm, d1990: sh(1990, mm).toFixed(2), d2000: sh(2000, mm).toFixed(2), d2010: sh(2010, mm).toFixed(2), d2020: sh(2020, mm).toFixed(2) })),
+    r => r.month === 8 || r.month === 1);
+}
+
+/* ---------- 04 passengers per flight ---------- */
+function drawPpf() {
+  const H = 260;
+  const { svg, width } = svgFor("chart-ppf", H);
+  const m = { t: 22, r: 44, b: 28, l: 40 };
+  const x = d3.scaleLinear().domain(d3.extent(annual, d => d.year)).range([m.l, width - m.r]);
+  const y = d3.scaleLinear().domain([0, 140]).range([H - m.b, m.t]);
+  gridY(svg, y, m.l, width - m.r, [0, 35, 70, 105, 140], v => v);
+  const accent = css("--accent");
+  svg.append("path").datum(annual).attr("fill", accent).attr("fill-opacity", 0.1)
+    .attr("d", d3.area().x(d => x(d.year)).y0(y(0)).y1(d => y(d.pax_per_flight)).curve(d3.curveMonotoneX));
+  svg.append("path").datum(annual).attr("fill", "none").attr("stroke", accent).attr("stroke-width", 2).attr("stroke-linejoin", "round").attr("stroke-linecap", "round")
+    .attr("d", d3.line().x(d => x(d.year)).y(d => y(d.pax_per_flight)).curve(d3.curveMonotoneX));
+  const t = svg.append("g").attr("class", "tick");
+  yearTicks(width).forEach(yy => t.append("text").attr("x", x(yy)).attr("y", H - 8).attr("text-anchor", "middle").text(yy));
+  const surf = css("--surface");
+  [[minPpf, "start", 8, 18], [last, "end", -2, -12]].forEach(([d, anchor, dx, dy]) => {
+    svg.append("circle").attr("cx", x(d.year)).attr("cy", y(d.pax_per_flight)).attr("r", 4.5).attr("fill", accent).attr("stroke", surf).attr("stroke-width", 2);
+    svg.append("text").attr("x", x(d.year) + dx).attr("y", y(d.pax_per_flight) + dy).attr("text-anchor", anchor)
+      .attr("font-size", 12.5).attr("font-weight", 600).attr("fill", css("--ink")).text(`${d.pax_per_flight.toFixed(0)} in ${d.year}`);
+  });
+  // crosshair
+  const cross = svg.append("g").style("display", "none");
+  cross.append("line").attr("y1", m.t).attr("y2", H - m.b).attr("stroke", css("--axis"));
+  cross.append("circle").attr("r", 4.5).attr("fill", accent).attr("stroke", surf).attr("stroke-width", 2);
+  svg.append("rect").attr("x", m.l).attr("y", m.t).attr("width", width - m.l - m.r).attr("height", H - m.t - m.b).attr("fill", "transparent")
+    .on("pointermove", ev => {
+      const yr = Math.round(x.invert(d3.pointer(ev)[0])), d = byYear[yr]; if (!d) return;
+      cross.style("display", null);
+      cross.select("line").attr("x1", x(yr)).attr("x2", x(yr));
+      cross.select("circle").attr("cx", x(yr)).attr("cy", y(d.pax_per_flight));
+      showTip(`<b>${yr}</b><br>${d.pax_per_flight} passengers per flight<br><span class="m">${fmtInt(d.flights)} flights</span>`, ev);
+    }).on("pointerleave", () => { cross.style("display", "none"); hideTip(); });
+  table("table-ppf", [["Year", r => r.year], ["Passengers", r => fmtInt(r.pax)], ["Passenger flights", r => fmtInt(r.flights)], ["Pax per flight", r => r.pax_per_flight]], annual);
+}
+
+/* ---------- 05 route islands ---------- */
+function drawRoutes() {
+  const isl = D.route_islands.map(r => ({ ...r, s: parseMonth(r.start), e: d3.timeMonth.offset(parseMonth(r.end), 1) }));
+  const byDest = d3.groups(isl, d => d.dest_icao).map(([icao, v]) => ({
+    icao, name: shortName(icao, v[0].dest_name), zone: v[0].dest_zone, islands: v,
+    months: d3.sum(v, d => d.months), first: d3.min(v, d => d.s), pax: d3.sum(v, d => d.pax) }))
+    .filter(d => d.months >= 12)
+    .sort((a, b) => (a.zone === "FOREIGN") - (b.zone === "FOREIGN") || a.first - b.first);
+  const rowH = 22, H = byDest.length * rowH + 40;
+  const { svg, width } = svgFor("chart-routes", H);
+  const m = { t: 8, r: 10, b: 28, l: 150 };
+  const x = d3.scaleTime().domain([new Date(1990, 0, 1), new Date(2026, 0, 1)]).range([m.l, width - m.r]);
+  const y = d3.scaleBand().domain(byDest.map(d => d.icao)).range([m.t, H - m.b]).padding(0.3);
+  const t = svg.append("g").attr("class", "tick");
+  yearTicks(width).forEach(yy => {
+    t.append("line").attr("x1", x(new Date(yy, 0, 1))).attr("x2", x(new Date(yy, 0, 1))).attr("y1", m.t).attr("y2", H - m.b).attr("stroke", css("--grid"));
+    t.append("text").attr("x", x(new Date(yy, 0, 1))).attr("y", H - 8).attr("text-anchor", "middle").text(yy);
+  });
+  const colDom = css("--dom"), colInt = css("--intl");
+  const bh = Math.min(12, y.bandwidth());
+  byDest.forEach(d => {
+    const cy = y(d.icao) + (y.bandwidth() - bh) / 2;
+    svg.append("text").attr("x", m.l - 10).attr("y", cy + bh / 2).attr("dy", "0.34em").attr("text-anchor", "end")
+      .attr("font-size", 12.5).attr("fill", css("--ink-2")).text(d.name);
+    svg.append("g").selectAll("rect").data(d.islands).join("rect")
+      .attr("x", i => x(i.s)).attr("y", cy).attr("height", bh).attr("rx", 2)
+      .attr("width", i => Math.max(1.5, x(i.e) - x(i.s) - 1))
+      .attr("fill", d.zone === "FOREIGN" ? colInt : colDom);
+    svg.append("rect").attr("x", m.l).attr("width", width - m.l - m.r).attr("y", y(d.icao) - 3).attr("height", y.step()).attr("fill", "transparent")
+      .on("pointermove", ev => {
+        const dt = x.invert(d3.pointer(ev)[0]);
+        const hit = d.islands.find(i => dt >= i.s && dt < i.e);
+        showTip(`<b>Toulouse – ${d.name}</b><br>${d.months} months published since ${d.first.getFullYear()}` +
+          (hit ? `<br><span class="m">${hit.start} → ${hit.end}: ${hit.months} months, ${fmtInt(hit.pax)} pax</span>` : `<br><span class="m">${dt.getFullYear()}: not published</span>`), ev);
+      }).on("pointerleave", hideTip);
+  });
+  table("table-routes", [["Route", r => "Toulouse – " + r.name], ["From", r => r.start], ["To", r => r.end], ["Months", r => r.months], ["Passengers", r => fmtInt(r.pax)]],
+    byDest.flatMap(d => d.islands.map(i => ({ ...i, name: d.name }))));
+}
+
+/* ---------- 06 forecast ---------- */
+function drawForecast() {
+  const act = D.monthly.filter(r => r.month >= "2022-01").map(r => ({ date: parseMonth(r.month), pax: r.pax }));
+  const fc = fcEns.map(r => ({ ...r, date: parseMonth(r.month) }));
+  const H = 300;
+  const { svg, width } = svgFor("chart-forecast", H);
+  const m = { t: 18, r: 10, b: 28, l: 44 };
+  const x = d3.scaleTime().domain([act[0].date, fc[fc.length - 1].date]).range([m.l, width - m.r]);
+  const y = d3.scaleLinear().domain([0, 950000]).range([H - m.b, m.t]);
+  gridY(svg, y, m.l, width - m.r, [0, 200000, 400000, 600000, 800000], v => (v ? v / 1000 + "K" : "0"));
+  const accent = css("--accent");
+  const joined = [{ date: act[act.length - 1].date, pax: act[act.length - 1].pax, lo80: act[act.length - 1].pax, hi80: act[act.length - 1].pax, lo95: act[act.length - 1].pax, hi95: act[act.length - 1].pax }, ...fc];
+  svg.append("path").datum(joined).attr("fill", accent).attr("fill-opacity", 0.12).attr("d", d3.area().x(d => x(d.date)).y0(d => y(d.lo95)).y1(d => y(d.hi95)));
+  svg.append("path").datum(joined).attr("fill", accent).attr("fill-opacity", 0.16).attr("d", d3.area().x(d => x(d.date)).y0(d => y(d.lo80)).y1(d => y(d.hi80)));
+  svg.append("line").attr("x1", x(fc[0].date)).attr("x2", x(fc[0].date)).attr("y1", m.t).attr("y2", H - m.b).attr("stroke", css("--axis"));
+  svg.append("text").attr("class", "axis-label").attr("x", x(fc[0].date) + 6).attr("y", m.t + 4).text("Forecast →");
+  svg.append("path").datum(act).attr("fill", "none").attr("stroke", accent).attr("stroke-width", 2).attr("stroke-linejoin", "round")
+    .attr("d", d3.line().x(d => x(d.date)).y(d => y(d.pax)));
+  svg.append("path").datum(joined).attr("fill", "none").attr("stroke", accent).attr("stroke-width", 2).attr("stroke-dasharray", "5 4")
+    .attr("d", d3.line().x(d => x(d.date)).y(d => y(d.pax)));
+  const t = svg.append("g").attr("class", "tick");
+  [2022, 2023, 2024, 2025, 2026, 2027].forEach(yy => t.append("text").attr("x", x(new Date(yy, 6, 1))).attr("y", H - 8).attr("text-anchor", "middle").text(yy));
+  const all = [...act.map(d => ({ ...d, kind: "actual" })), ...fc.map(d => ({ ...d, kind: "forecast" }))];
+  const cross = svg.append("g").style("display", "none");
+  cross.append("line").attr("y1", m.t).attr("y2", H - m.b).attr("stroke", css("--axis"));
+  cross.append("circle").attr("r", 4.5).attr("fill", accent).attr("stroke", css("--surface")).attr("stroke-width", 2);
+  const bis = d3.bisector(d => d.date).center;
+  svg.append("rect").attr("x", m.l).attr("y", m.t).attr("width", width - m.l - m.r).attr("height", H - m.t - m.b).attr("fill", "transparent")
+    .on("pointermove", ev => {
+      const d = all[bis(all, x.invert(d3.pointer(ev)[0]))];
+      cross.style("display", null); cross.select("line").attr("x1", x(d.date)).attr("x2", x(d.date)); cross.select("circle").attr("cx", x(d.date)).attr("cy", y(d.pax));
+      showTip(`<b>${MONTHS[d.date.getMonth()]} ${d.date.getFullYear()}</b> · ${d.kind}<br>${fmtInt(d.pax)} passengers` +
+        (d.kind === "forecast" ? `<br><span class="m">80%: ${fmtInt(d.lo80)} – ${fmtInt(d.hi80)}</span>` : ""), ev);
+    }).on("pointerleave", () => { cross.style("display", "none"); hideTip(); });
+  table("table-forecast", [["Month", r => r.month], ["Forecast", r => fmtInt(r.pax)], ["80% low", r => fmtInt(r.lo80)], ["80% high", r => fmtInt(r.hi80)], ["95% low", r => fmtInt(r.lo95)], ["95% high", r => fmtInt(r.hi95)]], fcEns);
+}
+
+function drawSideTables() {
+  const rc = metrics._reality_check_2026 || [];
+  if (rc.length) table("reality", [["Quarter", r => r.quarter.replace("2026", "") + " 2026"], ["Forecast", r => fmtInt(r.forecast)], ["Airport", r => fmtInt(r.actual_airport)], ["Error", r => pct(r.error_pct)]], rc);
+  const names = { seasonal_naive: "Seasonal naive", sarima: "SARIMA airline", ensemble: "Average of both" };
+  const rows = Object.entries(metrics).filter(([k]) => !k.startsWith("_")).map(([k, v]) => ({ k, ...v }));
+  if (rows.length) table("mape", [["Model", r => names[r.k] || r.k], ["Dec 23 +24 m", r => r["mape_24m_from_2023-12"].toFixed(2) + "%"], ["Dec 24 +12 m", r => r["mape_12m_from_2024-12"].toFixed(2) + "%"], ["Mean", r => r.mean_mape_pct.toFixed(2) + "%"]], rows, r => r.k === sel);
+}
+
+/* ---------- 07 under the hood ---------- */
+function drawHood() {
+  const q = D.quality;
+  document.getElementById("checks").innerHTML = q.map(c =>
+    `<li><span class="pill">${c.status === "PASS" ? "✓ PASS" : "! WARN"}</span><span>${c.check_name}</span><span class="r">${c.result}</span></li>`).join("");
+  const nApt = q.find(c => c.n === 1).result.split(" / ")[0], nPap = q.find(c => c.n === 2).result.split(" / ")[0];
+  document.getElementById("pipeline").innerHTML = [
+    ["01 · Extract", "data.gouv.fr API", "2 DGAC series, 72 CSV files"],
+    ["02 · Stage", "Raw text in PostgreSQL", `${fmtInt(+nApt + +nPap)} rows, untouched`],
+    ["03 · Model", "Star schema", "3 dimensions, 3 fact tables"],
+    ["04 · Check", "7 quality tests", "counts, gaps, PEQ identity"],
+    ["05 · Analyse", "SQL", "windows, FILTER, gaps & islands"],
+    ["06 · Forecast", "SARIMA + benchmark", "written back to the database"],
+  ].map(s => `<div class="step"><div class="k">${s[0]}</div><div class="v">${s[1]}</div><div class="d">${s[2]}</div></div>`).join("");
+  if (!bench) return;
+  const labels = { A_daily_month: "Toulouse, daily traffic for one month", B_year_ranking: "Top 10 airports for one year", C_monthly_trend: "Toulouse, monthly trend over 11 years" };
+  const rows = Object.keys(labels).map(k => {
+    const base = bench.stages.baseline[k].median_ms;
+    const cands = Object.entries(bench.stages).filter(([s]) => s !== "baseline").flatMap(([s, qs]) => Object.entries(qs).filter(([n]) => n.startsWith(k)).map(([, v]) => ({ s, ms: v.median_ms, nodes: v.scan_nodes })));
+    const how = c => c.s === "matview" ? "materialized view" : c.nodes.includes("Index Only Scan") ? "B-tree index" : c.nodes.includes("Bitmap Index Scan") ? "BRIN index" : c.s === "partitioned" ? "partition pruning" : c.s;
+    const best = cands.reduce((a, b) => (b.ms < a.ms ? b : a));
+    return { k, label: labels[k], base, best, how: how(best), speed: base / best.ms };
+  });
+  document.getElementById("bench-text").innerHTML = `Median of 5 runs after a warm-up, measured with <code>EXPLAIN ANALYZE</code> on PostgreSQL ${bench.environment.postgres.split(" ")[0]} (${bench.environment.cpu_count} vCPU). The flight-level table is simulated from the real monthly totals (${fmtInt(bench.environment.rows)} rows) because the real fact tables are too small for indexes to matter.`;
+  const H = rows.length * 58 + 34;
+  const { svg, width } = svgFor("chart-bench", H);
+  const m = { t: 8, r: 70, b: 26, l: 12 };
+  const x = d3.scaleLog().domain([0.03, 1000]).range([m.l, width - m.r]);
+  const t = svg.append("g").attr("class", "tick");
+  [0.1, 1, 10, 100, 1000].forEach(v => {
+    t.append("line").attr("x1", x(v)).attr("x2", x(v)).attr("y1", m.t).attr("y2", H - m.b).attr("stroke", css("--grid"));
+    t.append("text").attr("x", x(v)).attr("y", H - 8).attr("text-anchor", "middle").text(v >= 1 ? v + " ms" : v + " ms");
+  });
+  rows.forEach((r, i) => {
+    const cy = m.t + i * 58 + 36;
+    const tt = svg.append("text").attr("x", m.l).attr("y", cy - 16).attr("font-size", 13).attr("fill", css("--ink")).attr("font-weight", 500).text(r.label);
+    tt.append("tspan").attr("fill", css("--muted")).attr("font-weight", 400).style("font-variant-numeric", "tabular-nums")
+      .text(`  ·  ${r.base.toFixed(0)} ms → ${r.best.ms < 1 ? r.best.ms.toFixed(2) : r.best.ms.toFixed(1)} ms`);
+    svg.append("line").attr("x1", x(r.best.ms)).attr("x2", x(r.base)).attr("y1", cy).attr("y2", cy).attr("stroke", css("--axis")).attr("stroke-width", 2);
+    svg.append("circle").attr("cx", x(r.base)).attr("cy", cy).attr("r", 6).attr("fill", css("--gray")).attr("stroke", css("--surface")).attr("stroke-width", 2);
+    svg.append("circle").attr("cx", x(r.best.ms)).attr("cy", cy).attr("r", 6).attr("fill", css("--accent")).attr("stroke", css("--surface")).attr("stroke-width", 2);
+    svg.append("text").attr("x", x(r.best.ms)).attr("y", cy + 20).attr("text-anchor", "middle").attr("font-size", 12).attr("fill", css("--muted")).text(r.how);
+    svg.append("text").attr("x", width - 4).attr("y", cy).attr("dy", "0.34em").attr("text-anchor", "end").attr("font-size", 15).attr("font-weight", 600).attr("fill", css("--ink"))
+      .text("×" + fmtInt(Math.round(r.speed)));
+  });
+  const sz = bench.sizes;
+  document.getElementById("bench-stats").innerHTML = [
+    [sz.btree_index[0], "B-tree index (airport, date)"], [sz.brin_index[0], "BRIN index on the date"],
+    [sz.table[0], "simulated flight table"], [sz.matview[0], "monthly materialized view"],
+  ].map(s => `<div><b>${s[0].replace("kB", "KB")}</b>${s[1]}</div>`).join("");
+  const stageRows = Object.entries(bench.stages).flatMap(([s, qs]) => Object.entries(qs).map(([n, v]) => ({ s, n, ...v })));
+  table("table-bench", [["Stage", r => r.s], ["Query", r => r.n], ["Median (ms)", r => r.median_ms], ["Plan", r => r.scan_nodes.join(", ")]], stageRows);
+}
+
+/* ---------- render, and re-render on resize / theme change ---------- */
+function drawAll() { drawAnnual(); drawRecovery(); drawHeat(); drawPpf(); drawRoutes(); drawForecast(); drawSideTables(); drawHood(); }
+drawAll();
+let rt; const redraw = () => { clearTimeout(rt); rt = setTimeout(drawAll, 120); };
+addEventListener("resize", redraw);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw);
+new MutationObserver(redraw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+})();
+</script>
+</body>
+</html>

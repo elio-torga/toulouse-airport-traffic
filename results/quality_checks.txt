@@ -1,0 +1,11 @@
+ n |                    check_name                    |     result      | status 
+---+--------------------------------------------------+-----------------+--------
+ 1 | APT rows: staging = fact                         | 38821 / 38821   | PASS
+ 2 | PAP rows: staging = fact                         | 45787 / 45787   | PASS
+ 3 | Toulouse: months with data / months expected     | 432 / 432       | PASS
+ 4 | PEQ = pax + 10 x freight (within 2, rounding)    | 99.55 % of rows | PASS
+ 5 | Negative freight values in source (floored at 0) | 19 rows         | PASS
+ 6 | Routes with more than one published distance     | 0               | PASS
+ 7 | Toulouse 2025 passengers (airport reports 7.6 M) | 7 630 981       | PASS
+(7 rows)
+

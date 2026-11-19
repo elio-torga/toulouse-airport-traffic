@@ -1,0 +1,250 @@
+{
+  "environment": {
+    "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+    "cpu_count": 2,
+    "machine": "x86_64",
+    "rows": 17654080
+  },
+  "stages": {
+    "baseline": {
+      "A_daily_month": {
+        "median_ms": 400.329,
+        "runs_ms": [
+          400.329,
+          482.816,
+          422.649,
+          400.196,
+          399.889
+        ],
+        "scan_nodes": [
+          "Seq Scan"
+        ],
+        "buffers_hit": 786,
+        "buffers_read": 111775
+      },
+      "B_year_ranking": {
+        "median_ms": 552.65,
+        "runs_ms": [
+          627.469,
+          514.982,
+          552.65,
+          598.714,
+          551.484
+        ],
+        "scan_nodes": [
+          "Seq Scan"
+        ],
+        "buffers_hit": 1262,
+        "buffers_read": 111199
+      },
+      "C_monthly_trend": {
+        "median_ms": 528.172,
+        "runs_ms": [
+          540.586,
+          491.98,
+          528.172,
+          490.347,
+          566.931
+        ],
+        "scan_nodes": [
+          "Seq Scan"
+        ],
+        "buffers_hit": 1840,
+        "buffers_read": 110623
+      }
+    },
+    "btree": {
+      "A_daily_month": {
+        "median_ms": 1.146,
+        "runs_ms": [
+          1.146,
+          1.171,
+          1.133,
+          1.172,
+          1.06
+        ],
+        "scan_nodes": [
+          "Index Only Scan"
+        ],
+        "buffers_hit": 23,
+        "buffers_read": 0
+      },
+      "B_year_ranking": {
+        "median_ms": 561.135,
+        "runs_ms": [
+          529.104,
+          518.089,
+          591.628,
+          561.135,
+          569.73
+        ],
+        "scan_nodes": [
+          "Seq Scan"
+        ],
+        "buffers_hit": 2510,
+        "buffers_read": 109951
+      },
+      "C_monthly_trend": {
+        "median_ms": 131.185,
+        "runs_ms": [
+          131.185,
+          129.947,
+          133.089,
+          146.935,
+          129.74
+        ],
+        "scan_nodes": [
+          "Index Only Scan"
+        ],
+        "buffers_hit": 2810,
+        "buffers_read": 0
+      }
+    },
+    "brin": {
+      "A_daily_month": {
+        "median_ms": 0.8,
+        "runs_ms": [
+          0.746,
+          0.792,
+          0.811,
+          0.8,
+          0.958
+        ],
+        "scan_nodes": [
+          "Index Only Scan"
+        ],
+        "buffers_hit": 23,
+        "buffers_read": 0
+      },
+      "B_year_ranking": {
+        "median_ms": 186.054,
+        "runs_ms": [
+          190.413,
+          203.722,
+          186.054,
+          181.54,
+          184.309
+        ],
+        "scan_nodes": [
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan"
+        ],
+        "buffers_hit": 10782,
+        "buffers_read": 0
+      },
+      "C_monthly_trend": {
+        "median_ms": 134.577,
+        "runs_ms": [
+          169.877,
+          132.224,
+          134.577,
+          129.96,
+          138.993
+        ],
+        "scan_nodes": [
+          "Index Only Scan"
+        ],
+        "buffers_hit": 2810,
+        "buffers_read": 0
+      }
+    },
+    "partitioned": {
+      "A_daily_month": {
+        "median_ms": 0.855,
+        "runs_ms": [
+          0.862,
+          0.869,
+          0.799,
+          0.827,
+          0.855
+        ],
+        "scan_nodes": [
+          "Index Only Scan"
+        ],
+        "buffers_hit": 23,
+        "buffers_read": 0
+      },
+      "B_year_ranking": {
+        "median_ms": 194.795,
+        "runs_ms": [
+          186.361,
+          194.071,
+          194.795,
+          230.337,
+          205.914
+        ],
+        "scan_nodes": [
+          "Seq Scan"
+        ],
+        "buffers_hit": 6746,
+        "buffers_read": 4000
+      },
+      "C_monthly_trend": {
+        "median_ms": 183.358,
+        "runs_ms": [
+          184.525,
+          217.867,
+          159.207,
+          183.358,
+          168.458
+        ],
+        "scan_nodes": [
+          "Index Only Scan"
+        ],
+        "buffers_hit": 2849,
+        "buffers_read": 0
+      }
+    },
+    "matview": {
+      "B_year_ranking_mv": {
+        "median_ms": 0.67,
+        "runs_ms": [
+          0.669,
+          0.698,
+          0.646,
+          0.67,
+          0.78
+        ],
+        "scan_nodes": [
+          "Seq Scan"
+        ],
+        "buffers_hit": 128,
+        "buffers_read": 0
+      },
+      "C_monthly_trend_mv": {
+        "median_ms": 0.056,
+        "runs_ms": [
+          0.063,
+          0.052,
+          0.049,
+          0.071,
+          0.056
+        ],
+        "scan_nodes": [
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan"
+        ],
+        "buffers_hit": 3,
+        "buffers_read": 0
+      }
+    }
+  },
+  "sizes": {
+    "table": [
+      "878 MB",
+      921165824
+    ],
+    "btree_index": [
+      "531 MB",
+      556867584
+    ],
+    "brin_index": [
+      "104 kB",
+      106496
+    ],
+    "matview": [
+      "1024 kB",
+      1048576
+    ]
+  }
+}
